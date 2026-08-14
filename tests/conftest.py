@@ -19,6 +19,10 @@ FIXTURES = Path(__file__).parent / "fixtures"
 #: Path of the sample feed, relative to ``feed_root``.
 SAMPLE_FEED = "sample.atom"
 
+#: One fixture per syndication format, with the version reader reports for it,
+#: so that "we parse all three" is something tests can assert directly.
+FEED_FORMATS = {SAMPLE_FEED: "atom10", "sample.rss": "rss20", "sample.rdf": "rss10"}
+
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
@@ -40,4 +44,12 @@ def loaded_core(core: Core) -> Core:
     """A core with the sample feed subscribed and fetched."""
     core.reader.add_feed(SAMPLE_FEED)
     core.update_feeds(scheduled=False)
+    return core
+
+
+@pytest.fixture
+def all_formats_core(core: Core) -> Core:
+    """A core subscribed to one feed of every supported format."""
+    for url in FEED_FORMATS:
+        core.subscribe(url)
     return core

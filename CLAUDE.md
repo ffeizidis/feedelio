@@ -48,7 +48,8 @@ uv run python -m feedelio.worker
 cd frontend && npm run lint && npm run typecheck && npm test && npm run build
 cd e2e && npx playwright test                   # boots the real stack on :8791
 
-.claude/skills/browser-check/run.sh <scenario>.spec.ts   # exploratory: is it working *now*?
+.claude/skills/browser-check/run.sh .claude/skills/browser-check/scenarios/*.spec.ts
+                                                # the kept library: does it still work *now*?
 
 docker compose up --build                       # http://localhost:8000
 ```
@@ -66,6 +67,11 @@ history, no force-push, branches auto-deleted on merge.
   `Closes #N`.
 - Commit messages explain *why*, and end with
   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+- **Closing an issue means adding to the browser-check library**: a scenario in
+  `.claude/skills/browser-check/scenarios/` that actually ran, plus its row in that skill's
+  `COVERAGE.md` — or a line in the PR saying why the capability is not reachable from a
+  running stack. `COVERAGE.md` is the answer to "what do we know works?"; it is only worth
+  reading while that stays true.
 - Merging is the human's call unless they say otherwise.
 
 ## Backlog

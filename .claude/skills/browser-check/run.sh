@@ -127,7 +127,10 @@ ln -s "$ROOT/e2e/node_modules" "$RUN_DIR/node_modules"
 
 cleanup() {
   # Playwright tears its own webServer down; this only catches a hard kill.
-  pkill -f "uvicorn feedelio.api.app:create_app .*--port $PORT" 2>/dev/null || true
+  # Match on the port we were given and nothing else: pkill -f takes a regex,
+  # so unescaped dots in "feedelio.api.app" would match other people's
+  # processes, and this box does run unrelated servers.
+  pkill -f -- "uvicorn feedelio\\.api\\.app:create_app .*--port[= ]${PORT}($|[^0-9])" 2>/dev/null || true
 }
 trap cleanup EXIT
 

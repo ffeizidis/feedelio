@@ -12,13 +12,26 @@ import { defineConfig, devices } from '@playwright/test'
  *  - screenshot and trace on failure, because a failing verdict has to come
  *    with evidence.
  */
-const PORT = Number(process.env.E2E_PORT)
-const ROOT = process.env.BROWSER_CHECK_ROOT!
+/** run.sh sets these. Reading the config any other way is a mistake worth naming. */
+function required(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    throw new Error(`${name} is not set — run scenarios through run.sh, not playwright directly.`)
+  }
+  return value
+}
+
+const PORT = Number(required('E2E_PORT'))
+if (!Number.isInteger(PORT) || PORT <= 0) {
+  throw new Error(`E2E_PORT is not a port number: ${process.env.E2E_PORT}`)
+}
+const ROOT = required('BROWSER_CHECK_ROOT')
+const OUTPUT_DIR = required('BROWSER_CHECK_OUTPUT')
 const BASE_URL = `http://127.0.0.1:${PORT}`
 
 export default defineConfig({
   testDir: './scenarios',
-  outputDir: process.env.BROWSER_CHECK_OUTPUT!,
+  outputDir: OUTPUT_DIR,
   fullyParallel: false,
   workers: 1,
   retries: 0,

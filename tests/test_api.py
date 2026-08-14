@@ -132,3 +132,67 @@ def test_subscribing_to_an_unfetchable_feed_is_rejected(settings: Settings, core
 
         assert response.status_code == 400
         assert client.get("/api/feeds").json() == []
+
+
+def test_the_sidebar_gets_folders_with_their_feeds(library: TestClient) -> None:
+    assert library.post("/api/folders", json={"name": "News"}).json() == {
+        "name": "News",
+        "feeds": [],
+    }
+    moved = library.put("/api/feeds/folder", json={"url": SAMPLE_FEED, "folder": "News"})
+    assert moved.status_code == 204
+
+    folders = library.get("/api/folders").json()
+
+    assert [folder["name"] for folder in folders] == ["News", ""]
+    assert [feed["url"] for feed in folders[0]["feeds"]] == [SAMPLE_FEED]
+    assert folders[0]["feeds"][0]["title"] == "Feedelio Test Feed"
+    assert [feed["url"] for feed in folders[1]["feeds"]] == ["sample.rdf", "sample.rss"]
+
+
+def test_a_folder_is_one_entry_stream_over_http(library: TestClient) -> None:
+    library.post("/api/folders", json={"name": "News"})
+    for url in ("sample.rss", "sample.rdf"):
+        moved = library.put("/api/feeds/folder", json={"url": url, "folder": "News"})
+        assert moved.status_code == 204
+
+    entries = library.get("/api/entries", params={"folder": "News"}).json()
+    unfiled = library.get("/api/entries", params={"folder": ""}).json()
+
+    assert len(entries) == 4
+    assert {entry["feed_url"] for entry in entries} == {"sample.rss", "sample.rdf"}
+    assert {entry["feed_url"] for entry in unfiled} == {SAMPLE_FEED}
+    assert library.get("/api/entries", params={"folder": "Nope"}).status_code == 404
+
+
+def test_renaming_and_deleting_a_folder(library: TestClient) -> None:
+    library.post("/api/folders", json={"name": "News"})
+    library.put("/api/feeds/folder", json={"url": SAMPLE_FEED, "folder": "News"})
+
+    renamed = library.patch("/api/folders/News", json={"name": "Head lines"})
+    assert renamed.json()["name"] == "Head lines"
+
+    assert library.delete("/api/folders/Head lines").status_code == 204
+    # The feeds outlive the folder; they are simply unfiled.
+    assert library.get("/api/folders").json() == [
+        {"name": "", "feeds": library.get("/api/feeds").json()}
+    ]
+    assert len(library.get("/api/entries").json()) == 6
+
+
+def test_bad_folder_requests_are_reported(library: TestClient) -> None:
+    library.post("/api/folders", json={"name": "News"})
+
+    assert library.post("/api/folders", json={"name": " news "}).status_code == 409
+    assert library.post("/api/folders", json={"name": "  "}).status_code == 400
+    assert library.patch("/api/folders/News", json={"name": "a/b"}).status_code == 400
+    assert library.patch("/api/folders/Nope", json={"name": "Fine"}).status_code == 404
+    assert library.delete("/api/folders/Nope").status_code == 404
+
+    library.post("/api/folders", json={"name": "Tech"})
+    assert library.patch("/api/folders/Tech", json={"name": "news"}).status_code == 409
+
+    moved = library.put("/api/feeds/folder", json={"url": SAMPLE_FEED, "folder": "Nope"})
+    assert moved.status_code == 404
+    missing = library.put("/api/feeds/folder", json={"url": "nope.atom", "folder": "News"})
+    assert missing.status_code == 404

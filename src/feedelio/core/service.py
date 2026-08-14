@@ -296,13 +296,19 @@ class Core:
 
         Whichever folder it was in, it is not in it afterwards: that is what
         makes "exactly one folder" true rather than merely intended.
+
+        Only the empty string unfiles. A blank-but-not-empty name is a client
+        bug, and unfiling a feed on the strength of one would be a silent
+        change of state — it is rejected, exactly as it is when creating.
         """
         try:
             self._reader.get_feed(url)
         except exceptions.FeedNotFoundError as exc:
             raise FeedNotFoundError(f"not subscribed to {url}") from exc
 
-        wanted = None if folder.strip() == UNFILED else _folder_key(self._resolve_folder(folder))
+        wanted = (
+            None if folder == UNFILED else _folder_key(self._resolve_folder(_clean_name(folder)))
+        )
         for key in list(self._reader.get_tag_keys(url)):
             if key.startswith(FOLDER_PREFIX) and key != wanted:
                 self._reader.delete_tag(url, key)

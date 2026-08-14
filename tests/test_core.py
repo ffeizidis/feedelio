@@ -233,6 +233,20 @@ def test_a_feed_lives_in_exactly_one_folder(loaded_core: Core) -> None:
     assert [f.name for f in loaded_core.list_folders() if f.feeds] == ["Tech"]
 
 
+def test_only_the_empty_string_unfiles_a_feed(loaded_core: Core) -> None:
+    """A blank-but-not-empty name must not quietly move a feed out of its folder."""
+    loaded_core.create_folder("News")
+    loaded_core.move_feed(SAMPLE_FEED, "News")
+
+    with pytest.raises(InvalidFolderNameError):
+        loaded_core.move_feed(SAMPLE_FEED, "   ")
+
+    assert folder_tags(loaded_core, SAMPLE_FEED) == ["folder:News"]
+
+    loaded_core.move_feed(SAMPLE_FEED, UNFILED)
+    assert folder_tags(loaded_core, SAMPLE_FEED) == []
+
+
 def test_moving_a_feed_where_it_already_is_leaves_it_there(loaded_core: Core) -> None:
     """The move is idempotent, so a client can replay it without losing the feed."""
     loaded_core.create_folder("News")

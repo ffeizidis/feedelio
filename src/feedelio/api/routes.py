@@ -206,5 +206,7 @@ async def move_feed(move: FeedFolder, core: CoreDep) -> None:
     """Move a feed into a folder, or out of every folder."""
     try:
         await offload(lambda: core.move_feed(move.url, move.folder))
+    except InvalidFolderNameError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except (FeedNotFoundError, FolderNotFoundError) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc

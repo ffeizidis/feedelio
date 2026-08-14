@@ -20,8 +20,9 @@ src/feedelio/static/
 e2e/test-results/
 e2e/playwright-report/
 
-# Agent scratch space, including worktrees
-.claude/
+# Agent worktrees only. `.claude/skills/` is checked in — narrow this and
+# nothing else, or committed skills silently vanish from git.
+.claude/worktrees/
 
 # Runtime
 data/

@@ -22,6 +22,7 @@ from feedelio.core import (
     FolderExistsError,
     FolderNotFoundError,
     InvalidFolderNameError,
+    OpmlError,
 )
 
 log = logging.getLogger(__name__)
@@ -35,12 +36,13 @@ STATUS_BY_ERROR: dict[type[Exception], int] = {
     FolderExistsError: status.HTTP_409_CONFLICT,
     FolderNotFoundError: status.HTTP_404_NOT_FOUND,
     InvalidFolderNameError: status.HTTP_400_BAD_REQUEST,
+    OpmlError: status.HTTP_400_BAD_REQUEST,
 }
 
 
 def install_error_handlers(app: FastAPI) -> None:
     """Teach ``app`` to answer core exceptions the way it answers HTTPException."""
-    for base in (FeedError, FolderError):
+    for base in (FeedError, FolderError, OpmlError):
         app.add_exception_handler(base, _core_error_handler)
 
 

@@ -17,7 +17,10 @@ from feedelio.core.service import (
     FolderExistsError,
     FolderInfo,
     FolderNotFoundError,
+    ImportSummary,
     InvalidFolderNameError,
+    OpmlError,
+    OpmlExport,
     Status,
     make_core,
 )
@@ -35,7 +38,10 @@ __all__ = [
     "FolderExistsError",
     "FolderInfo",
     "FolderNotFoundError",
+    "ImportSummary",
     "InvalidFolderNameError",
+    "OpmlError",
+    "OpmlExport",
     "Status",
     "make_core",
 ]

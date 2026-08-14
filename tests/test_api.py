@@ -9,9 +9,10 @@ from fastapi.testclient import TestClient
 
 from feedelio import __version__
 from feedelio.api import create_app
+from feedelio.api.routes import MAX_OPML_BYTES
 from feedelio.config import Settings
 from feedelio.core import Core, FolderError, FolderInfo, FolderNotFoundError
-from tests.conftest import FEED_FORMATS, SAMPLE_FEED
+from tests.conftest import FEED_FORMATS, INOREADER_OPML, SAMPLE_FEED
 
 
 @pytest.fixture
@@ -196,6 +197,56 @@ def test_bad_folder_requests_are_reported(library: TestClient) -> None:
     assert moved.status_code == 404
     missing = library.put("/api/feeds/folder", json={"url": "nope.atom", "folder": "News"})
     assert missing.status_code == 404
+
+
+def test_uploading_an_inoreader_export_reports_what_landed(client: TestClient) -> None:
+    response = client.post(
+        "/api/opml",
+        files={"file": ("inoreader.opml", INOREADER_OPML.read_bytes(), "text/x-opml")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "added": 5,
+        "already_present": 0,
+        "failed": [],
+        "folders_created": ["News", "Tech", "Rust", "Saved for later"],
+        "folders_skipped": [],
+    }
+
+    folders = client.get("/api/folders").json()
+    assert [folder["name"] for folder in folders] == ["News", "Rust", "Saved for later", "Tech", ""]
+    assert [feed["url"] for feed in folders[1]["feeds"]] == [
+        "https://this-week-in-rust.org/rss.xml"
+    ]
+
+
+def test_downloading_the_subscription_list_is_a_file(client: TestClient) -> None:
+    client.post("/api/opml", files={"file": ("in.opml", INOREADER_OPML.read_bytes(), "text/xml")})
+
+    response = client.get("/api/opml")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/xml; charset=utf-8"
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith('attachment; filename="feedelio-subscriptions-')
+    assert disposition.endswith('.opml"')
+    assert b'<outline text="News"' in response.content
+
+
+def test_uploading_something_that_is_not_opml_is_rejected(client: TestClient) -> None:
+    response = client.post("/api/opml", files={"file": ("notes.txt", b"hello", "text/plain")})
+
+    assert response.status_code == 400
+    assert client.get("/api/feeds").json() == client.get("/api/feeds").json()
+
+
+def test_an_oversized_upload_is_refused_before_it_is_parsed(client: TestClient) -> None:
+    huge = b"<opml/>" + b" " * (MAX_OPML_BYTES + 1)
+
+    response = client.post("/api/opml", files={"file": ("huge.opml", huge, "text/xml")})
+
+    assert response.status_code == 413
 
 
 class UnmappedFolderError(FolderError):

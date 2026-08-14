@@ -23,6 +23,12 @@ SAMPLE_FEED = "sample.atom"
 #: so that "we parse all three" is something tests can assert directly.
 FEED_FORMATS = {SAMPLE_FEED: "atom10", "sample.rss": "rss20", "sample.rdf": "rss10"}
 
+#: A subscription list shaped like the one Inoreader hands you: categories with
+#: feeds in them, a nested category, an empty one, and an uncategorised feed at
+#: the top level. Its feeds are ``https://`` URLs on purpose — importing must
+#: not fetch, so nothing here can reach the network.
+INOREADER_OPML = FIXTURES / "inoreader.opml"
+
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:

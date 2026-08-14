@@ -57,3 +57,7 @@ def test_broken_feeds_are_reported(core: Core) -> None:
     core.update_feeds(scheduled=False)
     assert core.status().broken_feeds == 1
     assert SAMPLE_FEED not in {feed.url for feed in core.reader.get_feeds()}
+
+
+def test_deliberately_broken_to_prove_ci_goes_red() -> None:
+    assert 1 == 2

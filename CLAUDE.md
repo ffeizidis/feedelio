@@ -28,7 +28,7 @@ anything. This file is the working summary.
 | `src/feedelio/core/` | Domain layer over reader — the contract everything else uses |
 | `src/feedelio/api/` | FastAPI JSON API + serving the built SPA |
 | `src/feedelio/worker/` | Scheduled polling loop, its own process |
-| `frontend/` | React + TypeScript + Vite SPA; all API calls go through `src/api/client.ts` |
+| `frontend/` | React + TypeScript + Vite SPA; all API calls go through `frontend/src/api/client.ts` |
 | `e2e/` | Playwright against the real stack (`stack.sh` builds the SPA, seeds SQLite, serves both) |
 | `tests/` | Backend tests; `conftest.py` gives you `settings`, `core`, `loaded_core` |
 

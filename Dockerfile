@@ -19,7 +19,7 @@ COPY src/ ./src/
 RUN uv sync --frozen --no-dev
 
 # --- Stage 3: runtime -------------------------------------------------------
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
     FEEDELIO_DB_PATH=/data/feedelio.sqlite \

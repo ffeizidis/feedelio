@@ -54,7 +54,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Artifact attestations are not available for user-owned private repos
+      # ("Feature not available…", see run 31795511958). Kept for the day the
+      # repo goes public — same treatment as codeql.yml.
       - name: Attest provenance
+        if: github.event.repository.visibility == 'public'
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ghcr.io/${{ github.repository }}

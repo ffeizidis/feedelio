@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from feedelio import __version__
 from feedelio.api import create_app
 from feedelio.config import Settings
-from feedelio.core import Core
+from feedelio.core import Core, FolderError, FolderInfo, FolderNotFoundError
 from tests.conftest import FEED_FORMATS, SAMPLE_FEED
 
 
@@ -196,3 +196,43 @@ def test_bad_folder_requests_are_reported(library: TestClient) -> None:
     assert moved.status_code == 404
     missing = library.put("/api/feeds/folder", json={"url": "nope.atom", "folder": "News"})
     assert missing.status_code == 404
+
+
+class UnmappedFolderError(FolderError):
+    """A core error the API layer has no status for."""
+
+
+class NarrowerFolderNotFoundError(FolderNotFoundError):
+    """A more specific flavour of an error the API layer does map."""
+
+
+def _always_raise(error: type[Exception]) -> Callable[[Core], list[FolderInfo]]:
+    """A ``Core.list_folders`` that fails, to reach the handlers from a route."""
+
+    def list_folders(self: Core) -> list[FolderInfo]:
+        raise error("nothing a client should read")
+
+    return list_folders
+
+
+def test_an_unmapped_core_error_is_a_deliberate_500(
+    library: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Core, "list_folders", _always_raise(UnmappedFolderError))
+
+    response = library.get("/api/folders")
+
+    # A status nobody chose is a bug, not a client error, and the message stays in the log.
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal Server Error"}
+
+
+def test_a_subclass_of_a_mapped_error_keeps_its_status(
+    library: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Core, "list_folders", _always_raise(NarrowerFolderNotFoundError))
+
+    response = library.get("/api/folders")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "nothing a client should read"}

@@ -20,6 +20,9 @@ src/feedelio/static/
 e2e/test-results/
 e2e/playwright-report/
 
+# Agent scratch space, including worktrees
+.claude/
+
 # Runtime
 data/
 *.sqlite

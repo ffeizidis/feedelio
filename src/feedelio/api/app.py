@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from feedelio import __version__
+from feedelio.api.errors import install_error_handlers
 from feedelio.api.routes import router
 from feedelio.config import Settings, get_settings
 from feedelio.core import Core, make_core
@@ -36,6 +37,7 @@ def create_app(settings: Settings | None = None, *, core: Core | None = None) ->
 
     app = FastAPI(title="Feedelio", version=__version__, lifespan=lifespan)
     app.include_router(router)
+    install_error_handlers(app)
     _serve_spa(app, settings.static_dir)
     return app
 

@@ -1,0 +1,34 @@
+default_install_hook_types: [pre-commit]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.6
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: frontend-lint
+        name: eslint + tsc
+        entry: bash -c 'cd frontend && npm run lint && npm run typecheck'
+        language: system
+        files: ^frontend/
+        pass_filenames: false

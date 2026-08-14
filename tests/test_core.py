@@ -17,11 +17,12 @@ from feedelio.core import (
     FolderExistsError,
     FolderNotFoundError,
     InvalidFolderNameError,
+    OpmlError,
     make_core,
 )
-from feedelio.core.service import FOLDER_PREFIX
+from feedelio.core.service import FOLDER_PREFIX, MAX_OPML_DEPTH
 from feedelio.core.storage import PLUGINS, open_reader
-from tests.conftest import FEED_FORMATS, FIXTURES, SAMPLE_FEED
+from tests.conftest import FEED_FORMATS, FIXTURES, INOREADER_OPML, SAMPLE_FEED
 
 
 def folder_tags(core: Core, url: str) -> list[str]:
@@ -393,3 +394,211 @@ def test_operations_on_an_unknown_folder_are_errors(loaded_core: Core) -> None:
 def test_moving_a_feed_we_do_not_have_is_an_error(core: Core) -> None:
     with pytest.raises(FeedNotFoundError):
         core.move_feed(SAMPLE_FEED, UNFILED)
+
+
+def structure(core: Core) -> dict[str, list[str]]:
+    """The sidebar tree as plain data: folder name -> the URLs in it."""
+    return {
+        folder.name: sorted(feed.url for feed in folder.feeds) for folder in core.list_folders()
+    }
+
+
+def opml_document(body: str) -> bytes:
+    """A minimal subscription list wrapping ``body``, for the edge cases."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        f'<opml version="1.0"><head><title>Test</title></head><body>{body}</body></opml>'
+    ).encode()
+
+
+def test_import_keeps_the_folders_of_an_inoreader_export(core: Core) -> None:
+    """#15's acceptance criterion, one half of it.
+
+    Categories become folders; a feed nested deeper than one category lands in
+    the innermost one, since that is the label it actually carries and nested
+    folders are M2; a feed with no category stays unfiled.
+    """
+    core.import_opml(INOREADER_OPML.read_bytes())
+
+    assert structure(core) == {
+        "News": ["https://example.com/atom.xml", "https://rss.example.com/feed.xml"],
+        "Rust": ["https://this-week-in-rust.org/rss.xml"],
+        "Saved for later": [],
+        "Tech": ["https://rdf.example.com/feed.rdf"],
+        UNFILED: ["https://blog.example.com/index.xml"],
+    }
+    # One folder per feed survives an import, nested categories included.
+    assert all(len(folder_tags(core, feed.url)) <= 1 for feed in core.list_feeds())
+
+
+def test_import_reports_what_it_did(core: Core) -> None:
+    summary = core.import_opml(INOREADER_OPML.read_bytes())
+
+    assert summary.added == 5
+    assert summary.already_present == 0
+    assert summary.failed == []
+    # Document order, so the report reads like the file the user just uploaded.
+    assert summary.folders_created == ["News", "Tech", "Rust", "Saved for later"]
+    assert summary.folders_skipped == []
+
+
+def test_import_does_not_fetch_the_feeds(core: Core) -> None:
+    """Hundreds of feeds cannot be fetched inside one request; the worker will."""
+    core.import_opml(INOREADER_OPML.read_bytes())
+
+    status = core.status()
+    assert status == type(status)(feeds=5, entries=0, unread=0, broken_feeds=0)
+    assert all(feed.updated is None and not feed.broken for feed in core.list_feeds())
+
+
+def test_import_leaves_a_feed_it_already_has_where_it_is(loaded_core: Core) -> None:
+    """An import adds subscriptions; it does not reorganise the ones you have."""
+    loaded_core.create_folder("Mine")
+    loaded_core.move_feed(SAMPLE_FEED, "Mine")
+
+    summary = loaded_core.import_opml(
+        opml_document(
+            '<outline text="News" title="News">'
+            f'<outline type="rss" text="Sample" xmlUrl="{SAMPLE_FEED}"/>'
+            "</outline>"
+        )
+    )
+
+    assert summary.added == 0
+    assert summary.already_present == 1
+    assert folder_tags(loaded_core, SAMPLE_FEED) == ["folder:Mine"]
+    # The category still becomes a folder: the file says it is there.
+    assert structure(loaded_core) == {"Mine": [SAMPLE_FEED], "News": []}
+
+
+def test_import_reuses_a_folder_that_already_exists(core: Core) -> None:
+    core.create_folder("news")
+
+    summary = core.import_opml(INOREADER_OPML.read_bytes())
+
+    assert "News" not in summary.folders_created
+    assert structure(core)["news"] == [
+        "https://example.com/atom.xml",
+        "https://rss.example.com/feed.xml",
+    ]
+
+
+def test_import_reports_a_category_it_cannot_use_as_a_folder_name(core: Core) -> None:
+    """``/`` is reserved for nested folder paths, so such a category is refused.
+
+    Refused, and said so: the feed is still subscribed, unfiled, rather than the
+    whole upload failing over one awkward name.
+    """
+    summary = core.import_opml(
+        opml_document(
+            '<outline text="Science / Nature" title="Science / Nature">'
+            '<outline type="rss" text="Nature" xmlUrl="https://nature.example.com/feed"/>'
+            "</outline>"
+        )
+    )
+
+    assert summary.added == 1
+    assert summary.folders_created == []
+    assert summary.folders_skipped == ["Science / Nature"]
+    assert structure(core) == {UNFILED: ["https://nature.example.com/feed"]}
+
+
+def test_import_reports_a_feed_it_cannot_add(core: Core) -> None:
+    summary = core.import_opml(
+        opml_document(
+            '<outline text="News" title="News">'
+            '<outline type="rss" text="Bad" xmlUrl="/etc/passwd"/>'
+            '<outline type="rss" text="Good" xmlUrl="https://good.example.com/feed"/>'
+            "</outline>"
+        )
+    )
+
+    assert summary.added == 1
+    assert summary.failed == ["/etc/passwd"]
+    assert structure(core) == {"News": ["https://good.example.com/feed"]}
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"not xml at all", b"<rss version='2.0'><channel/></rss>", b""],
+    ids=["not-xml", "not-opml", "empty"],
+)
+def test_import_rejects_a_file_that_is_not_a_subscription_list(core: Core, content: bytes) -> None:
+    with pytest.raises(OpmlError):
+        core.import_opml(content)
+
+    assert core.list_feeds() == []
+
+
+def test_import_refuses_an_entity_bomb_before_reader_sees_it(core: Core) -> None:
+    """The upload is parsed by defusedxml first; stdlib XML would expand this."""
+    bomb = (
+        b'<?xml version="1.0"?><!DOCTYPE opml ['
+        b'<!ENTITY a "boom"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">'
+        b"]><opml><body><outline>&b;</outline></body></opml>"
+    )
+
+    with pytest.raises(OpmlError):
+        core.import_opml(bomb)
+
+
+def test_import_refuses_a_list_nested_deeper_than_we_walk(core: Core) -> None:
+    """A depth limit is what keeps a hostile file from recursing us to death."""
+    body = "<outline text='deep'>" * (MAX_OPML_DEPTH + 1) + "</outline>" * (MAX_OPML_DEPTH + 1)
+
+    with pytest.raises(OpmlError):
+        core.import_opml(opml_document(body))
+
+
+def test_an_outline_without_a_name_is_not_a_category(core: Core) -> None:
+    """Only a named outline groups anything; a blank one passes its feeds through."""
+    core.import_opml(
+        opml_document(
+            '<outline><outline type="rss" xmlUrl="https://a.example.com/feed"/></outline>'
+        )
+    )
+
+    assert structure(core) == {UNFILED: ["https://a.example.com/feed"]}
+
+
+def test_export_round_trips_the_folders_through_import(
+    core: Core, settings: Settings, tmp_path: Path
+) -> None:
+    """#15's acceptance criterion, the other half — both directions, one test."""
+    core.import_opml(INOREADER_OPML.read_bytes())
+    exported = core.export_opml()
+
+    with make_core(settings, db_path=tmp_path / "round-trip.sqlite") as second:
+        second.import_opml(exported.content)
+
+        assert structure(second) == structure(core)
+        assert structure(second)["Rust"] == ["https://this-week-in-rust.org/rss.xml"]
+        assert structure(second)["Saved for later"] == []
+        assert structure(second)[UNFILED] == ["https://blog.example.com/index.xml"]
+
+
+def test_export_carries_what_another_reader_needs(loaded_core: Core) -> None:
+    """reader writes the outlines, so a fetched feed exports with its metadata."""
+    loaded_core.create_folder("News")
+    loaded_core.move_feed(SAMPLE_FEED, "News")
+
+    content = loaded_core.export_opml().content.decode()
+
+    assert '<outline text="News" title="News">' in content
+    assert 'title="Feedelio Test Feed"' in content
+    assert f'xmlUrl="{SAMPLE_FEED}"' in content
+    assert 'htmlUrl="https://example.com/"' in content
+
+
+def test_export_is_named_for_the_browser_to_save(core: Core) -> None:
+    exported = core.export_opml()
+
+    assert exported.filename.startswith("feedelio-subscriptions-")
+    assert exported.filename.endswith(".opml")
+
+
+def test_export_of_an_empty_library_is_still_a_subscription_list(core: Core) -> None:
+    exported = core.export_opml()
+
+    assert exported.content.startswith(b"<?xml")
+    assert core.import_opml(exported.content).added == 0

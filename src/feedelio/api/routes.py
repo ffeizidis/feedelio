@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from feedelio import __version__
@@ -22,6 +22,10 @@ router = APIRouter(prefix="/api")
 
 #: Most articles anyone can usefully scroll in one response.
 MAX_ENTRIES = 500
+
+#: Largest subscription list we will read. A thousand feeds is a few hundred
+#: kilobytes; anything past this is not somebody's Inoreader export.
+MAX_OPML_BYTES = 4 * 1024 * 1024
 
 
 class Health(BaseModel):
@@ -96,6 +100,18 @@ class FeedFolder(BaseModel):
 
     url: Annotated[str, Field(min_length=1)]
     folder: str
+
+
+class OpmlImport(BaseModel):
+    """What an upload did — silence after a 400-feed import would be cruel."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    added: int
+    already_present: int
+    failed: list[str]
+    folders_created: list[str]
+    folders_skipped: list[str]
 
 
 @router.get("/health")
@@ -177,3 +193,34 @@ async def delete_folder(name: str, core: CoreDep) -> None:
 async def move_feed(move: FeedFolder, core: CoreDep) -> None:
     """Move a feed into a folder, or out of every folder."""
     await offload(lambda: core.move_feed(move.url, move.folder))
+
+
+@router.post("/opml")
+async def import_opml(
+    core: CoreDep,
+    file: Annotated[UploadFile, File(description="An OPML subscription list.")],
+) -> OpmlImport:
+    """Import a subscription list, its categories becoming folders.
+
+    The feeds are not fetched here — an export of that size would keep the
+    request open for minutes; the worker collects them.
+    """
+    content = await file.read()
+    if len(content) > MAX_OPML_BYTES:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"a subscription list larger than {MAX_OPML_BYTES} bytes is not one we read",
+        )
+    summary = await offload(lambda: core.import_opml(content))
+    return OpmlImport.model_validate(summary)
+
+
+@router.get("/opml", response_class=Response, responses={200: {"content": {"application/xml": {}}}})
+async def export_opml(core: CoreDep) -> Response:
+    """Download the whole library as an OPML file, folders included."""
+    export = await offload(core.export_opml)
+    return Response(
+        content=export.content,
+        media_type="application/xml; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"'},
+    )

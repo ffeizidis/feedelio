@@ -12,6 +12,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "pydantic-settings>=2.7",
+    "python-multipart>=0.0.32",
+    "defusedxml>=0.7.1",
 ]
 
 [project.scripts]
@@ -47,7 +49,7 @@ files = ["src", "tests"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = "reader.*"
+module = ["reader.*", "defusedxml.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

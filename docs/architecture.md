@@ -40,7 +40,11 @@ The API and the worker share the SQLite file and never call each other.
 - **Two panes**, not three: a merged sidebar on the left — the article list
   grouped under collapsible folder headings — and the article on the right.
 - **Folders are a strict tree, one folder per feed.** A feed lives in exactly
-  one place; nesting is allowed, membership in two folders is not.
+  one place; nesting is allowed, membership in two folders is not. They are a
+  convention over reader's tags, not a table: `folder:<name>` on a feed is
+  membership, the same key on the reader itself is existence (so an empty
+  folder survives), and `/` is reserved for the nested-folder path. The service
+  layer is the only writer of those keys, which is what enforces "exactly one".
 - Keyboard-first reading; the mouse is optional.
 
 ## Deploy

@@ -5,23 +5,37 @@ The API and the worker both go through this layer; neither talks to
 """
 
 from feedelio.core.service import (
+    UNFILED,
     Core,
     EntryInfo,
     FeedError,
     FeedExistsError,
     FeedInfo,
+    FeedNotFoundError,
     FeedUnavailableError,
+    FolderError,
+    FolderExistsError,
+    FolderInfo,
+    FolderNotFoundError,
+    InvalidFolderNameError,
     Status,
     make_core,
 )
 
 __all__ = [
+    "UNFILED",
     "Core",
     "EntryInfo",
     "FeedError",
     "FeedExistsError",
     "FeedInfo",
+    "FeedNotFoundError",
     "FeedUnavailableError",
+    "FolderError",
+    "FolderExistsError",
+    "FolderInfo",
+    "FolderNotFoundError",
+    "InvalidFolderNameError",
     "Status",
     "make_core",
 ]

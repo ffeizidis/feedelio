@@ -15,6 +15,19 @@ from feedelio.core.storage import open_reader
 
 log = logging.getLogger(__name__)
 
+#: Tag key prefix marking a folder. On a feed it means "this feed is in that
+#: folder"; on the reader itself it means "that folder exists", which is what
+#: keeps an empty folder in the sidebar. Nothing else writes ``folder:`` keys.
+FOLDER_PREFIX = "folder:"
+
+#: The pseudo-folder holding feeds that are in no folder. A real folder name is
+#: never empty, so the empty string is free to mean "unfiled" — and the sidebar
+#: can then treat every group it renders identically, including this one.
+UNFILED = ""
+
+#: Longest folder name we accept. A sidebar limit, not a storage one.
+MAX_FOLDER_NAME = 64
+
 
 class FeedError(Exception):
     """A subscription could not be created."""
@@ -24,8 +37,28 @@ class FeedExistsError(FeedError):
     """The feed is already subscribed to."""
 
 
+class FeedNotFoundError(FeedError):
+    """There is no such subscription."""
+
+
 class FeedUnavailableError(FeedError):
     """The URL is not a feed we can fetch and parse."""
+
+
+class FolderError(Exception):
+    """A folder operation could not be carried out."""
+
+
+class FolderExistsError(FolderError):
+    """A folder by that name (ignoring case) is already there."""
+
+
+class FolderNotFoundError(FolderError):
+    """There is no such folder."""
+
+
+class InvalidFolderNameError(FolderError):
+    """The name is empty, too long, or uses a reserved character."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +103,35 @@ class EntryInfo:
     content: str | None
     read: bool
     important: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FolderInfo:
+    """A folder and its feeds, in the order the sidebar renders them."""
+
+    #: Empty for the unfiled pseudo-folder; see :data:`UNFILED`.
+    name: str
+    feeds: list[FeedInfo]
+
+
+def _folder_key(name: str) -> str:
+    return f"{FOLDER_PREFIX}{name}"
+
+
+def _clean_name(name: str) -> str:
+    """Trim a folder name and refuse the ones we cannot render or store."""
+    cleaned = name.strip()
+    if not cleaned:
+        raise InvalidFolderNameError("a folder needs a name")
+    if len(cleaned) > MAX_FOLDER_NAME:
+        raise InvalidFolderNameError(f"folder names are at most {MAX_FOLDER_NAME} characters")
+    if not cleaned.isprintable():
+        raise InvalidFolderNameError("folder names cannot contain control characters")
+    if "/" in cleaned:
+        # Reserved so that nested folders (M2) can spell a path as "Tech/Rust"
+        # without having to migrate the names people already typed.
+        raise InvalidFolderNameError("'/' is reserved for nested folders")
+    return cleaned
 
 
 def _feed_info(feed: Feed) -> FeedInfo:
@@ -165,13 +227,132 @@ class Core:
         self,
         *,
         feed: str | None = None,
+        folder: str | None = None,
         read: bool | None = None,
         important: bool | None = None,
         limit: int | None = None,
     ) -> list[EntryInfo]:
-        """Articles, newest first, optionally narrowed to one feed or flag."""
-        entries = self._reader.get_entries(feed=feed, read=read, important=important, limit=limit)
+        """Articles, newest first, optionally narrowed to one feed, folder or flag.
+
+        ``folder`` is a folder name, or :data:`UNFILED` for the feeds in none;
+        leaving it out means every feed. A folder's articles come back as the
+        one merged stream #16 asks for, because reader does the merging.
+        """
+        entries = self._reader.get_entries(
+            feed=feed,
+            feed_tags=self._folder_filter(folder),
+            read=read,
+            important=important,
+            limit=limit,
+        )
         return [_entry_info(entry) for entry in entries]
+
+    # -- Folders ----------------------------------------------------------
+    #
+    # Folders are a convention over reader's tags, not a table of their own:
+    # a feed is in folder X when it carries the tag ``folder:X``, and X exists
+    # when the reader itself carries the same key. One folder per feed is not
+    # something the storage can express, so :meth:`move_feed` — the only writer
+    # of those keys — enforces it.
+
+    def list_folders(self) -> list[FolderInfo]:
+        """Every folder with its feeds: the tree the sidebar renders.
+
+        Folders come alphabetically, and the unfiled feeds last, as a group
+        with an empty name — omitted when there are none.
+        """
+        names = self._folder_names()
+        folders = [FolderInfo(name=name, feeds=self._feeds_in(name)) for name in names]
+        unfiled = self._feeds_matching([f"-{_folder_key(name)}" for name in names])
+        if unfiled:
+            folders.append(FolderInfo(name=UNFILED, feeds=unfiled))
+        return folders
+
+    def create_folder(self, name: str) -> FolderInfo:
+        """Add an empty folder, ready for feeds to be moved into."""
+        cleaned = _clean_name(name)
+        if (clash := self._find_folder(cleaned)) is not None:
+            raise FolderExistsError(f"a folder named {clash!r} already exists")
+        self._reader.set_tag((), _folder_key(cleaned))
+        return FolderInfo(name=cleaned, feeds=[])
+
+    def rename_folder(self, name: str, new_name: str) -> FolderInfo:
+        """Rename a folder, taking its feeds with it."""
+        current = self._resolve_folder(name)
+        cleaned = _clean_name(new_name)
+        clash = self._find_folder(cleaned)
+        if clash is not None and clash != current:
+            raise FolderExistsError(f"a folder named {clash!r} already exists")
+        if cleaned != current:
+            self._retag(_folder_key(current), _folder_key(cleaned))
+        return FolderInfo(name=cleaned, feeds=self._feeds_in(cleaned))
+
+    def delete_folder(self, name: str) -> None:
+        """Drop a folder. Its feeds stay subscribed and become unfiled."""
+        self._retag(_folder_key(self._resolve_folder(name)), None)
+
+    def move_feed(self, url: str, folder: str) -> None:
+        """Put a feed in ``folder``, or in none of them (:data:`UNFILED`).
+
+        Whichever folder it was in, it is not in it afterwards: that is what
+        makes "exactly one folder" true rather than merely intended.
+        """
+        try:
+            self._reader.get_feed(url)
+        except exceptions.FeedNotFoundError as exc:
+            raise FeedNotFoundError(f"not subscribed to {url}") from exc
+
+        wanted = None if folder.strip() == UNFILED else _folder_key(self._resolve_folder(folder))
+        for key in list(self._reader.get_tag_keys(url)):
+            if key.startswith(FOLDER_PREFIX) and key != wanted:
+                self._reader.delete_tag(url, key)
+        if wanted is not None:
+            self._reader.set_tag(url, wanted)
+
+    def _folder_names(self) -> list[str]:
+        """The folders that exist, alphabetically, case-insensitively."""
+        keys = self._reader.get_tag_keys(())
+        names = [key.removeprefix(FOLDER_PREFIX) for key in keys if key.startswith(FOLDER_PREFIX)]
+        return sorted(names, key=str.casefold)
+
+    def _find_folder(self, name: str) -> str | None:
+        """The stored spelling of ``name``, or ``None``. Names ignore case."""
+        folded = name.strip().casefold()
+        return next((n for n in self._folder_names() if n.casefold() == folded), None)
+
+    def _resolve_folder(self, name: str) -> str:
+        found = self._find_folder(name)
+        if found is None:
+            raise FolderNotFoundError(f"no folder named {name.strip()!r}")
+        return found
+
+    def _feeds_matching(self, tags: list[str]) -> list[FeedInfo]:
+        return [_feed_info(f) for f in self._reader.get_feeds(tags=tags, sort=FeedSort.TITLE)]
+
+    def _feeds_in(self, name: str) -> list[FeedInfo]:
+        return self._feeds_matching([_folder_key(name)])
+
+    def _folder_filter(self, folder: str | None) -> list[str] | None:
+        """``folder`` as one of reader's feed-tag filters.
+
+        Unfiled has no tag of its own, so it is "in none of the folders there
+        are" — which is also why an empty library filters nothing away.
+        """
+        if folder is None:
+            return None
+        if folder.strip() == UNFILED:
+            return [f"-{_folder_key(name)}" for name in self._folder_names()]
+        return [_folder_key(self._resolve_folder(folder))]
+
+    def _retag(self, key: str, new_key: str | None) -> None:
+        """Move every feed tagged ``key`` onto ``new_key``, or untag them."""
+        for feed in list(self._reader.get_feeds(tags=[key])):
+            if new_key is not None:
+                self._reader.set_tag(feed, new_key)
+            self._reader.delete_tag(feed, key)
+        if new_key is not None:
+            self._reader.set_tag((), new_key)
+        self._reader.delete_tag((), key)
 
     def update_feeds(self, *, scheduled: bool = True) -> None:
         """Fetch feeds that are due (or all of them when ``scheduled`` is off)."""

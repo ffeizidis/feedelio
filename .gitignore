@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+src/feedelio/static/
+
+# Playwright
+e2e/test-results/
+e2e/playwright-report/
+
+# Runtime
+data/
+*.sqlite
+*.sqlite-*
+.env

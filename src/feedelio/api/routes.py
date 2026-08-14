@@ -2,6 +2,9 @@
 
 Thin by design: every route hands a blocking core call to :func:`offload` and
 reshapes the result into a response model. No :mod:`reader` here.
+
+Core exceptions are left to travel: :mod:`feedelio.api.errors` maps them to a
+status once, for every route.
 """
 
 from __future__ import annotations
@@ -9,19 +12,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from feedelio import __version__
 from feedelio.api.deps import CoreDep, offload
-from feedelio.core import (
-    FeedExistsError,
-    FeedNotFoundError,
-    FeedUnavailableError,
-    FolderExistsError,
-    FolderNotFoundError,
-    InvalidFolderNameError,
-)
 
 router = APIRouter(prefix="/api")
 
@@ -120,12 +115,7 @@ async def health(core: CoreDep) -> Health:
 @router.post("/feeds", status_code=status.HTTP_201_CREATED)
 async def subscribe(new: NewFeed, core: CoreDep) -> Feed:
     """Subscribe to a feed and fetch it immediately."""
-    try:
-        feed = await offload(lambda: core.subscribe(new.url))
-    except FeedExistsError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    except FeedUnavailableError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    feed = await offload(lambda: core.subscribe(new.url))
     return Feed.model_validate(feed)
 
 
@@ -148,14 +138,11 @@ async def list_entries(
     limit: Annotated[int, Query(ge=1, le=MAX_ENTRIES)] = 100,
 ) -> list[Entry]:
     """Articles, newest first. A folder reads as one merged stream."""
-    try:
-        entries = await offload(
-            lambda: core.list_entries(
-                feed=feed, folder=folder, read=read, important=important, limit=limit
-            )
+    entries = await offload(
+        lambda: core.list_entries(
+            feed=feed, folder=folder, read=read, important=important, limit=limit
         )
-    except FolderNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    )
     return [Entry.model_validate(entry) for entry in entries]
 
 
@@ -169,44 +156,24 @@ async def list_folders(core: CoreDep) -> list[Folder]:
 @router.post("/folders", status_code=status.HTTP_201_CREATED)
 async def create_folder(new: FolderName, core: CoreDep) -> Folder:
     """Add an empty folder."""
-    try:
-        folder = await offload(lambda: core.create_folder(new.name))
-    except InvalidFolderNameError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    except FolderExistsError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    folder = await offload(lambda: core.create_folder(new.name))
     return Folder.model_validate(folder)
 
 
 @router.patch("/folders/{name}")
 async def rename_folder(name: str, renamed: FolderName, core: CoreDep) -> Folder:
     """Rename a folder; its feeds go with it."""
-    try:
-        folder = await offload(lambda: core.rename_folder(name, renamed.name))
-    except FolderNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    except InvalidFolderNameError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    except FolderExistsError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    folder = await offload(lambda: core.rename_folder(name, renamed.name))
     return Folder.model_validate(folder)
 
 
 @router.delete("/folders/{name}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_folder(name: str, core: CoreDep) -> None:
     """Drop a folder. Its feeds stay subscribed, unfiled."""
-    try:
-        await offload(lambda: core.delete_folder(name))
-    except FolderNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    await offload(lambda: core.delete_folder(name))
 
 
 @router.put("/feeds/folder", status_code=status.HTTP_204_NO_CONTENT)
 async def move_feed(move: FeedFolder, core: CoreDep) -> None:
     """Move a feed into a folder, or out of every folder."""
-    try:
-        await offload(lambda: core.move_feed(move.url, move.folder))
-    except InvalidFolderNameError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    except (FeedNotFoundError, FolderNotFoundError) as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    await offload(lambda: core.move_feed(move.url, move.folder))

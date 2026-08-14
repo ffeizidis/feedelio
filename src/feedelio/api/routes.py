@@ -205,7 +205,10 @@ async def import_opml(
     The feeds are not fetched here — an export of that size would keep the
     request open for minutes; the worker collects them.
     """
-    content = await file.read()
+    # Read one byte past the limit and no further: the multipart parser has
+    # already received the body, but this bounds what we pull out of it. A cap
+    # on the upload itself belongs in front of the app, not here.
+    content = await file.read(MAX_OPML_BYTES + 1)
     if len(content) > MAX_OPML_BYTES:
         raise HTTPException(
             status.HTTP_413_CONTENT_TOO_LARGE,

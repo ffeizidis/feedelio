@@ -35,9 +35,11 @@ MAX_FOLDER_NAME = 64
 #: Title written into an exported subscription list, and the stem of its filename.
 OPML_TITLE = "Feedelio subscriptions"
 
-#: How deep an uploaded subscription list may nest, matching reader's own
-#: parser. A limit is what keeps a hostile file from recursing us to death.
-MAX_OPML_DEPTH = 10
+#: How deep an uploaded subscription list may nest. This counts *elements*, not
+#: just outlines, because bounding the recursion is the point — a hostile file
+#: nests wrappers just as happily as outlines. Outlines sit inside
+#: ``<opml><body>``, so the usable outline nesting is two shallower.
+MAX_OPML_DEPTH = 12
 
 
 class FeedError(Exception):
@@ -191,6 +193,8 @@ def _opml_groups(content: bytes) -> tuple[list[str], dict[str, str]]:
     by_url: dict[str, str] = {}
 
     def walk(node: etree.Element, category: str, depth: int) -> None:
+        # Every descent counts, wrappers included: the cap is there to stop the
+        # recursion, and Python's stack does not care which tag it is on.
         if depth > MAX_OPML_DEPTH:
             raise OpmlError("the subscription list is nested too deeply")
         for child in node:

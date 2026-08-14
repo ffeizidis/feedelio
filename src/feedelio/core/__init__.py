@@ -4,6 +4,24 @@ The API and the worker both go through this layer; neither talks to
 :mod:`reader` directly.
 """
 
-from feedelio.core.service import Core, Status, make_core
+from feedelio.core.service import (
+    Core,
+    EntryInfo,
+    FeedError,
+    FeedExistsError,
+    FeedInfo,
+    FeedUnavailableError,
+    Status,
+    make_core,
+)
 
-__all__ = ["Core", "Status", "make_core"]
+__all__ = [
+    "Core",
+    "EntryInfo",
+    "FeedError",
+    "FeedExistsError",
+    "FeedInfo",
+    "FeedUnavailableError",
+    "Status",
+    "make_core",
+]

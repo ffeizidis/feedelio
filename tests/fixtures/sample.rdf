@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns="http://purl.org/rss/1.0/">
+  <channel rdf:about="https://rdf.example.com/feed.rdf">
+    <title>Feedelio RSS 1.0 Feed</title>
+    <link>https://rdf.example.com/</link>
+    <description>An RSS 1.0 (RDF) fixture.</description>
+    <dc:date>2026-01-02T10:00:00Z</dc:date>
+    <items>
+      <rdf:Seq>
+        <rdf:li rdf:resource="https://rdf.example.com/first" />
+        <rdf:li rdf:resource="https://rdf.example.com/second" />
+      </rdf:Seq>
+    </items>
+  </channel>
+  <item rdf:about="https://rdf.example.com/first">
+    <title>RDF first post</title>
+    <link>https://rdf.example.com/first</link>
+    <dc:creator>Radu Dumitru</dc:creator>
+    <dc:date>2026-01-01T10:00:00Z</dc:date>
+    <description>&lt;p&gt;Hello from the first RDF post.&lt;/p&gt;</description>
+  </item>
+  <item rdf:about="https://rdf.example.com/second">
+    <title>RDF second post</title>
+    <link>https://rdf.example.com/second</link>
+    <dc:creator>Radu Dumitru</dc:creator>
+    <dc:date>2026-01-02T10:00:00Z</dc:date>
+    <description>&lt;p&gt;Hello from the second RDF post.&lt;/p&gt;</description>
+  </item>
+</rdf:RDF>

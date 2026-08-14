@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/__pycache__
+.venv
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+coverage
+htmlcov
+e2e
+tests
+data
+*.sqlite*

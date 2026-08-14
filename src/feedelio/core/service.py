@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from types import TracebackType
 
-from reader import Entry, Feed, Reader, exceptions
+from reader import Entry, Feed, FeedSort, Reader, exceptions
 
 from feedelio.config import Settings
 from feedelio.core.storage import open_reader
@@ -154,8 +154,12 @@ class Core:
         return _feed_info(self._reader.get_feed(url))
 
     def list_feeds(self) -> list[FeedInfo]:
-        """Every subscription, by title."""
-        return [_feed_info(feed) for feed in self._reader.get_feeds()]
+        """Every subscription, by title.
+
+        ``sort`` is reader's default, passed explicitly so the ordering is part
+        of this layer's contract rather than something a caller has to look up.
+        """
+        return [_feed_info(feed) for feed in self._reader.get_feeds(sort=FeedSort.TITLE)]
 
     def list_entries(
         self,

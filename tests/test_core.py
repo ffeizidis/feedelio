@@ -10,7 +10,7 @@ import pytest
 from feedelio.config import Settings
 from feedelio.core import Core, FeedExistsError, FeedUnavailableError, make_core
 from feedelio.core.storage import PLUGINS, open_reader
-from tests.conftest import FEED_FORMATS, SAMPLE_FEED
+from tests.conftest import FEED_FORMATS, FIXTURES, SAMPLE_FEED
 
 
 def test_open_reader_creates_the_database(tmp_path: Path) -> None:
@@ -95,6 +95,13 @@ def test_subscribing_to_an_unfetchable_feed_leaves_no_subscription(core: Core) -
         core.subscribe("does-not-exist.atom")
 
     assert core.list_feeds() == []
+
+
+def test_a_rejected_subscription_does_not_leak_server_paths(core: Core) -> None:
+    with pytest.raises(FeedUnavailableError) as caught:
+        core.subscribe("does-not-exist.atom")
+
+    assert str(FIXTURES) not in str(caught.value)
 
 
 def test_subscribing_to_an_invalid_url_is_an_error(core: Core) -> None:

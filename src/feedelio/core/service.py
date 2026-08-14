@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +12,8 @@ from reader import Entry, Feed, Reader, exceptions
 
 from feedelio.config import Settings
 from feedelio.core.storage import open_reader
+
+log = logging.getLogger(__name__)
 
 
 class FeedError(Exception):
@@ -137,13 +140,16 @@ class Core:
         except exceptions.FeedExistsError as exc:
             raise FeedExistsError(f"already subscribed to {url}") from exc
         except exceptions.InvalidFeedURLError as exc:
-            raise FeedUnavailableError(str(exc)) from exc
+            raise FeedUnavailableError(f"not a usable feed URL: {url}") from exc
 
         try:
             self._reader.update_feed(url)
         except exceptions.ParseError as exc:
             self._reader.delete_feed(url)
-            raise FeedUnavailableError(str(exc)) from exc
+            # reader's message can carry local paths and resolved URLs; the
+            # caller gets a flat one and the detail goes to the log.
+            log.info("subscription to %s failed", url, exc_info=exc)
+            raise FeedUnavailableError(f"could not fetch or parse {url}") from exc
 
         return _feed_info(self._reader.get_feed(url))
 

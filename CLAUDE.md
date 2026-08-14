@@ -31,6 +31,7 @@ anything. This file is the working summary.
 | `frontend/` | React + TypeScript + Vite SPA; all API calls go through `frontend/src/api/client.ts` |
 | `e2e/` | Playwright against the real stack (`stack.sh` builds the SPA, seeds SQLite, serves both) |
 | `tests/` | Backend tests; `conftest.py` gives you `settings`, `core`, `loaded_core` |
+| `.claude/skills/` | Agent skills, checked in. `.gitignore` ignores `.claude/worktrees/` only — do not re-broaden it |
 
 Configuration is environment-only (`FEEDELIO_*`, see `src/feedelio/config.py`). No config file,
 no admin UI.
@@ -46,6 +47,8 @@ uv run python -m feedelio.worker
 
 cd frontend && npm run lint && npm run typecheck && npm test && npm run build
 cd e2e && npx playwright test                   # boots the real stack on :8791
+
+.claude/skills/browser-check/run.sh <scenario>.spec.ts   # exploratory: is it working *now*?
 
 docker compose up --build                       # http://localhost:8000
 ```

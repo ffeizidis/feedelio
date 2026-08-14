@@ -45,6 +45,14 @@ The API and the worker share the SQLite file and never call each other.
   membership, the same key on the reader itself is existence (so an empty
   folder survives), and `/` is reserved for the nested-folder path. The service
   layer is the only writer of those keys, which is what enforces "exactly one".
+- **OPML categories are folders**, in both directions (#15). Importing puts a
+  feed in the *innermost* category it sits under — one folder per feed has to
+  stay true, and that name is the leaf of the path nested folders (M2) will
+  give it; a feed with no category stays unfiled, and every category becomes a
+  folder even when it is empty. An import never re-files a feed the library
+  already has, and never fetches: the worker collects the new feeds. Exporting
+  writes one category outline per folder, with the unfiled feeds at the top
+  level, so the file imports back into the same tree.
 - Keyboard-first reading; the mouse is optional.
 
 ## Deploy

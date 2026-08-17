@@ -10,7 +10,7 @@ dependencies = [
     # feedparser 6.0.14 stopped pulling in. Drop when reader vendors a newer copy.
     "sgmllib3k>=1",
     "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
+    "uvicorn[standard]>=0.52.3",
     "pydantic-settings>=2.7",
     "python-multipart>=0.0.32",
     "defusedxml>=0.7.1",

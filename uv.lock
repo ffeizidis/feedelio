@@ -449,7 +449,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "reader", specifier = ">=3.26" },
     { name = "sgmllib3k", specifier = ">=1" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.3" },
 ]
 
 [package.metadata.requires-dev]

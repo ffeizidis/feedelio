@@ -1,0 +1,15 @@
+services:
+  feedelio:
+    build: .
+    image: feedelio:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      FEEDELIO_TOKEN: ${FEEDELIO_TOKEN:-}
+      FEEDELIO_ALLOW_PRIVATE_NETWORK: ${FEEDELIO_ALLOW_PRIVATE_NETWORK:-0}
+    volumes:
+      - feedelio-data:/data
+    stop_grace_period: 60s
+volumes:
+  feedelio-data:

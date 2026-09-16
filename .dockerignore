@@ -1,0 +1,13 @@
+.git
+.agents
+.codex
+.venv
+web/node_modules
+web/dist
+data
+tests
+test-results
+__pycache__
+.pytest_cache
+.ruff_cache
+.env

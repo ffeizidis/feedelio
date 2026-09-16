@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "minimum_chrome_version": "120",
+  "name": "Feedelio companion",
+  "version": "0.1.0",
+  "description": "Subscribe to the current page and sync your Chrome Reading List with your private Feedelio server.",
+  "permissions": ["activeTab", "readingList", "alarms", "storage"],
+  "host_permissions": ["http://localhost:8000/*", "http://127.0.0.1:8000/*"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "options_page": "options.html",
+  "action": { "default_title": "Subscribe with Feedelio" }
+}

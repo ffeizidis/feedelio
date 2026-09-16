@@ -1,0 +1,49 @@
+body {
+  background: #f3f2ed;
+  color: #2a302c;
+  font:
+    14px/1.7 system-ui,
+    sans-serif;
+}
+main {
+  max-width: 520px;
+  margin: 60px auto;
+  padding: 30px;
+  background: #fbfaf6;
+  border: 1px solid #dddfd6;
+  border-radius: 10px;
+}
+h1 {
+  font:
+    32px Georgia,
+    serif;
+}
+p {
+  color: #6c746b;
+}
+label {
+  display: block;
+  margin: 18px 0;
+  font-weight: 600;
+}
+input:not([type="checkbox"]) {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 5px;
+  padding: 10px;
+  border: 1px solid #dddfd6;
+  border-radius: 5px;
+  font: inherit;
+}
+button {
+  background: #35644d;
+  color: white;
+  padding: 10px 17px;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+input[type="checkbox"] {
+  accent-color: #35644d;
+}

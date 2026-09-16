@@ -151,6 +151,8 @@ Backups contain your feed cookie/proxy settings as well as reading data. Keep ex
 
 ## Verification
 
+The [adversarial browser audit](audit/REPORT.md) documents known defects and a 52-feature coverage matrix. Its separate `uv run pytest audit -q` suite intentionally fails until those defects are addressed; the original regression suite below is not a feature-completeness certificate.
+
 ```sh
 uv sync --extra dev
 npm ci --prefix web

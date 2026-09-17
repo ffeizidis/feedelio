@@ -50,7 +50,7 @@ def test_desktop_reading_workflow(core, site, web_server):
         page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(web_server)
-        expect(page.get_by_role("heading", name="Your feeds.")).to_be_visible()
+        expect(page.locator(".reader-pane .article-list")).to_be_visible()
         expect(page.locator(".article-row")).to_have_count(2)
         page.keyboard.press("j")
         expect(page.locator(".reading-content h1")).to_be_visible()
@@ -87,13 +87,14 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.keyboard.press("Escape")
         expect(page.locator("dialog")).to_have_count(0)
         # Desktop-only shell remains two panes at 200% zoom, with horizontal scrolling.
+        page.locator(".article-row").first.click()
         page.evaluate("document.documentElement.style.zoom='2'")
         expect(page.locator(".prose")).to_be_visible()
         assert (
             page.locator(".shell").evaluate(
                 '(el)=>getComputedStyle(el).gridTemplateColumns.split(" ").length'
             )
-            == 2
+            == 3  # Two panes and their draggable separator.
         )
         assert not errors, errors
         browser.close()

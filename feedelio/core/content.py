@@ -153,9 +153,9 @@ def fingerprint(title, text):
     return hashlib.sha256((title.strip().lower() + "\n" + text.strip()).encode()).hexdigest()
 
 
-def extract(url, options=None):
+def extract(url, options=None, *, document=None, transcripts=True):
     options = {"cookie_origin": url} | (options or {})
-    data, document_url, _ = fetch(url, options)
+    data, document_url, _ = document if document is not None else fetch(url, options)
     soup = BeautifulSoup(data, "html.parser")
     canonical = soup.select_one('link[rel~="canonical"][href]')
     final = clean_url(urljoin(document_url, canonical["href"])) if canonical else clean_url(document_url)
@@ -172,7 +172,7 @@ def extract(url, options=None):
             data, output_format="html", include_links=True, include_images=True, include_tables=True
         )
     try:
-        transcript = provided_transcript(soup, data, document_url, options)
+        transcript = provided_transcript(soup, data, document_url, options) if transcripts else ""
     except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
         # Optional captions must not discard an otherwise usable article body.
         transcript = ""

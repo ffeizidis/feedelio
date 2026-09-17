@@ -265,7 +265,9 @@ def test_site_scraper_and_feed_backfill(core, site):
             }
         ),
     )
-    assert core.backfill(id, base + "/archive")["pages"] == 2
+    state = core.backfill(id, base + "/archive")
+    assert state["pages"] == 1
+    assert core.backfill(id, state=state)["pages"] == 2
     assert core.articles()["total"] == 3
     assert len(core.feeds()) == 1
 

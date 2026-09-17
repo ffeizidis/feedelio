@@ -146,6 +146,63 @@ function Modal({ title, subtitle, onClose, children, wide = false }) {
   );
 }
 
+function BackfillStatus({ jobs, feeds, scope, act }) {
+  const latest = [
+    ...new Map([...jobs].reverse().map((j) => [j.payload.feed_id, j])).values(),
+  ];
+  const visible = latest.filter(
+    (j) =>
+      feeds.some((f) => f.id === j.payload.feed_id) &&
+      (!scope.feed_id || j.payload.feed_id === scope.feed_id),
+  );
+  if (!visible.length) return null;
+  return (
+    <div className="backfill-status" aria-label="Archive progress">
+      {visible.map((j) => (
+        <div key={j.id}>
+          <strong>
+            {feeds.find((f) => f.id === j.payload.feed_id)?.title}:{" "}
+          </strong>
+          Archive {j.status === "queued" ? "waiting" : j.status} ·{" "}
+          {j.result?.pages || 0} pages · {j.result?.articles || 0} older
+          articles added
+          {!!j.result?.previews && (
+            <span> · {j.result.previews} available as preview only</span>
+          )}
+          {j.status === "queued" && (
+            <span>
+              {" "}
+              ·{" "}
+              {j.result?.not_before
+                ? "next request after " +
+                  new Date(j.result.not_before).toLocaleTimeString()
+                : "one request per minute"}
+            </span>
+          )}
+          {["queued", "running", "paused", "failed"].includes(j.status) && (
+            <button
+              onClick={() =>
+                act("control_backfill", {
+                  id: j.id,
+                  action: ["paused", "failed"].includes(j.status)
+                    ? "resume"
+                    : "pause",
+                })
+              }
+            >
+              {["paused", "failed"].includes(j.status)
+                ? "Resume archive"
+                : "Pause archive"}
+            </button>
+          )}
+          {j.error && <p className="error-color">{j.error}</p>}
+          {j.result?.message && <p>{j.result.message}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const cache = useQueryClient();
   const overview = useQuery({
@@ -170,6 +227,17 @@ function App() {
     [playVideo, setPlayVideo] = useState(!!resume.playVideo),
     [reloadPolicy, setReloadPolicy] = useState(false);
   const [token, setToken] = useState("");
+  const [paneWidth, setPaneWidth] = useState(null);
+  const drag = useRef(null);
+  const clampPane = (value) =>
+    Math.max(260, Math.min(value, Math.min(600, window.innerWidth - 466)));
+  function finishResize(e) {
+    if (!drag.current) return;
+    const width = clampPane(e.clientX);
+    drag.current = null;
+    setPaneWidth(width);
+    pref("sidebar_width", width);
+  }
   const searchRef = useRef(null),
     readingRef = useRef(null),
     navigation = useRef({ key: null, items: [], index: -1 });
@@ -277,6 +345,7 @@ function App() {
     }
   }
   function stream(nextView, nextScope = {}) {
+    setSelected(null);
     setView(nextView);
     setScope(nextScope);
     setOffset(0);
@@ -363,6 +432,7 @@ function App() {
           behavior: "smooth",
         });
       } else if (e.key === "Escape") {
+        setSelected(null);
         setQ("");
         searchRef.current?.blur();
       }
@@ -506,8 +576,13 @@ function App() {
       ));
 
   return (
-    <main className="shell">
-      <aside className="sidebar" aria-label="Library and articles">
+    <main
+      className="shell"
+      style={{
+        "--sidebar-width": (paneWidth ?? settings.sidebar_width ?? 320) + "px",
+      }}
+    >
+      <aside className="sidebar" aria-label="Library">
         <header className="brand">
           <a href="/" aria-label="Feedelio home">
             <span className="brand-mark">
@@ -529,13 +604,19 @@ function App() {
               aria-label="Search articles"
               placeholder="Search your library"
               value={q}
-              onChange={(e) => setQ(e.target.value)}
+              onChange={(e) => {
+                setSelected(null);
+                setQ(e.target.value);
+              }}
             />
             {q ? (
               <IconButton
                 icon={X}
                 label="Clear search"
-                onClick={() => setQ("")}
+                onClick={() => {
+                  setSelected(null);
+                  setQ("");
+                }}
               />
             ) : (
               <kbd>/</kbd>
@@ -602,184 +683,6 @@ function App() {
             </div>
           )}
         </div>
-        <div className="list-heading">
-          <div>
-            <h1>{heading}</h1>
-            <span>
-              {count.toLocaleString()} {count === 1 ? "article" : "articles"}
-            </span>
-          </div>
-          <div className="list-actions">
-            <IconButton
-              icon={CheckCheck}
-              label="Mark this stream as read"
-              onClick={() =>
-                run(
-                  "mark_all",
-                  { ...scope, view, q: deferredQ },
-                  "Stream marked as read · U to undo",
-                )
-              }
-            />
-            <IconButton
-              icon={RefreshCw}
-              label="Refresh feeds (R)"
-              onClick={() =>
-                run(
-                  "enqueue",
-                  {
-                    kind: "refresh",
-                    payload: scope.feed_id ? { feed_id: scope.feed_id } : {},
-                  },
-                  "Refresh queued",
-                )
-              }
-            />
-          </div>
-        </div>
-        <div className="list-filters">
-          <button
-            className={settings.hide_read ? "on" : ""}
-            onClick={() => pref("hide_read", !settings.hide_read)}
-          >
-            <span className="toggle-dot" />
-            Unread only
-          </button>
-          <button
-            onClick={() =>
-              pref("sort", settings.sort === "oldest" ? "newest" : "oldest")
-            }
-          >
-            <ArrowUpDown size={13} />
-            {settings.sort === "oldest" ? "Oldest first" : "Newest first"}
-          </button>
-        </div>
-        <div className="article-list" aria-label="Article list">
-          {articles.error && (
-            <div className="inline-error" role="alert">
-              {articles.error.message}
-              <button onClick={() => articles.refetch()}>Try again</button>
-            </div>
-          )}
-          {articles.isPending ? (
-            <div className="list-empty">
-              <Loader2 className="spin" size={22} />
-              <p>Gathering your articles…</p>
-            </div>
-          ) : !items.length ? (
-            <div className="list-empty">
-              <Leaf size={27} />
-              <h3>
-                {q
-                  ? "No matches yet"
-                  : data.feeds.length
-                    ? "A quiet moment."
-                    : "A fresh start."}
-              </h3>
-              <p>
-                {q
-                  ? "Try a different word or turn off unread only."
-                  : data.feeds.length
-                    ? "You’re all caught up here. New articles will arrive automatically."
-                    : "The things you love to read will find a home here."}
-              </p>
-              {!data.feeds.length && (
-                <button onClick={() => setModal("subscribe")}>
-                  Add a subscription <ArrowUpRight size={14} />
-                </button>
-              )}
-            </div>
-          ) : (
-            [...groups].map(([id, group]) => (
-              <section key={id} className="article-group">
-                <button
-                  className="group-heading"
-                  onClick={() =>
-                    setCollapsed({
-                      ...collapsed,
-                      ["list" + id]: !collapsed["list" + id],
-                    })
-                  }
-                >
-                  {collapsed["list" + id] ? (
-                    <ChevronRight size={13} />
-                  ) : (
-                    <ChevronDown size={13} />
-                  )}
-                  <Folder size={13} />
-                  <span>{folderPath(id)}</span>
-                  <span>{group.length}</span>
-                </button>
-                {!collapsed["list" + id] &&
-                  group.map((item) => (
-                    <button
-                      key={item.id}
-                      className={
-                        "article-row " +
-                        (selected === item.id ? "selected " : "") +
-                        (item.read ? "read" : "unread")
-                      }
-                      onClick={() => open(item)}
-                      aria-current={selected === item.id ? "true" : undefined}
-                    >
-                      <div className="row-meta">
-                        <span className="source">{item.feed_title}</span>
-                        <span>{date(item.published)}</span>
-                      </div>
-                      <div className="row-title">
-                        <span className="unread-dot" />
-                        <h3>{item.title}</h3>
-                        {!!item.starred && (
-                          <Star
-                            size={13}
-                            className="starred"
-                            fill="currentColor"
-                          />
-                        )}
-                      </div>
-                      <p>
-                        {item.excerpt || "Open this article to start reading."}
-                      </p>
-                      <div className="row-bottom">
-                        <span>
-                          {Math.max(1, Math.ceil(item.words / 230))} min read
-                        </span>
-                        {item.tags.slice(0, 2).map((t) => (
-                          <span className="tag" key={t}>
-                            {t}
-                          </span>
-                        ))}
-                        {!!item.duplicate && (
-                          <span className="tag">Similar story</span>
-                        )}
-                      </div>
-                    </button>
-                  ))}
-              </section>
-            ))
-          )}
-          {(count > 100 || offset > 0) && (
-            <div className="pagination">
-              <button
-                disabled={!offset}
-                onClick={() => setOffset(Math.max(0, offset - 100))}
-              >
-                <ChevronLeft size={16} />
-                Previous
-              </button>
-              <span>
-                {offset + 1}–{Math.min(offset + 100, count)}
-              </span>
-              <button
-                disabled={offset + 100 >= count}
-                onClick={() => setOffset(offset + 100)}
-              >
-                Next
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          )}
-        </div>
         <footer className="sidebar-footer">
           <button onClick={() => setModal("feeds")}>
             <Settings2 size={16} />
@@ -807,12 +710,58 @@ function App() {
           </div>
         </footer>
       </aside>
+      <div
+        className="pane-divider"
+        role="separator"
+        tabIndex={0}
+        aria-label="Resize panes"
+        aria-orientation="vertical"
+        aria-valuemin={260}
+        aria-valuemax={600}
+        aria-valuenow={paneWidth ?? settings.sidebar_width ?? 320}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          drag.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          e.preventDefault();
+        }}
+        onPointerMove={(e) => {
+          if (drag.current) setPaneWidth(clampPane(e.clientX));
+        }}
+        onPointerUp={finishResize}
+        onPointerCancel={() => {
+          drag.current = null;
+          setPaneWidth(null);
+        }}
+        onKeyDown={(e) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key))
+            return;
+          e.preventDefault();
+          e.stopPropagation();
+          const value = clampPane(
+            e.key === "Home"
+              ? 260
+              : e.key === "End"
+                ? 600
+                : (paneWidth ?? settings.sidebar_width ?? 320) +
+                  (e.key === "ArrowLeft" ? -20 : 20),
+          );
+          setPaneWidth(value);
+          pref("sidebar_width", value);
+        }}
+      />
       <section className="reader-pane" aria-label="Reading pane">
         <header className="reader-toolbar">
           <div className="breadcrumbs">
+            {selected && (
+              <button onClick={() => setSelected(null)}>
+                <ChevronLeft size={16} />
+                Back to list
+              </button>
+            )}
             <BookOpen size={16} />
-            <span>{a ? a.feed_title : "Your reading space"}</span>
-            {a && (
+            <span>{selected && a ? a.feed_title : heading}</span>
+            {selected && a && (
               <>
                 <ChevronRight size={13} />
                 <span>Article</span>
@@ -840,54 +789,211 @@ function App() {
             />
           </div>
         </header>
-        {!selected ? (
-          <div className="welcome">
-            <div className="welcome-illustration">
-              <div className="orbit orbit-one" />
-              <div className="orbit orbit-two" />
-              <span className="leaf-one">
-                <Leaf size={25} />
+        <div className="stream-pane" hidden={!!selected}>
+          <div className="list-heading">
+            <div>
+              <h1>{heading}</h1>
+              <span>
+                {count.toLocaleString()} {count === 1 ? "article" : "articles"}
               </span>
-              <span className="leaf-two">
-                <Rss size={19} />
-              </span>
-              <BookOpen size={52} strokeWidth={1} />
             </div>
-            <span className="eyebrow">A LITTLE ROOM TO READ</span>
-            <h2>
-              Your feeds.
-              <br />
-              At your own pace.
-            </h2>
-            <p>
-              A quiet home for the ideas, stories, and voices
-              <br />
-              you want to spend time with.
-            </p>
+            <div className="list-actions">
+              <IconButton
+                icon={CheckCheck}
+                label="Mark this stream as read"
+                onClick={() =>
+                  run(
+                    "mark_all",
+                    { ...scope, view, q: deferredQ },
+                    "Stream marked as read · U to undo",
+                  )
+                }
+              />
+              <IconButton
+                icon={RefreshCw}
+                label="Refresh feeds (R)"
+                onClick={() =>
+                  run(
+                    "enqueue",
+                    {
+                      kind: "refresh",
+                      payload: scope.feed_id ? { feed_id: scope.feed_id } : {},
+                    },
+                    "Refresh queued",
+                  )
+                }
+              />
+            </div>
+          </div>
+          <BackfillStatus
+            jobs={data.backfills || []}
+            feeds={data.feeds}
+            scope={scope}
+            act={run}
+          />
+          <div className="list-filters">
+            <select
+              aria-label="Article list display"
+              value={settings.list_display || "preview"}
+              onChange={(e) => pref("list_display", e.target.value)}
+            >
+              <option value="title">Titles only</option>
+              <option value="preview">Titles and preview</option>
+            </select>
             <button
-              className="primary"
+              className={settings.hide_read ? "on" : ""}
+              onClick={() => pref("hide_read", !settings.hide_read)}
+            >
+              <span className="toggle-dot" />
+              Unread only
+            </button>
+            <button
               onClick={() =>
-                items.length ? open(items[0]) : setModal("subscribe")
+                pref("sort", settings.sort === "oldest" ? "newest" : "oldest")
               }
             >
-              {items.length ? "Start reading" : "Find your first feed"}
-              <ArrowUpRight size={16} />
+              <ArrowUpDown size={13} />
+              {settings.sort === "oldest" ? "Oldest first" : "Newest first"}
             </button>
-            <div className="welcome-shortcuts">
-              <span>
-                <kbd>J</kbd>
-                <kbd>K</kbd> move between articles
-              </span>
-              <span>
-                <kbd>?</kbd> all shortcuts
-              </span>
-            </div>
-            <span className="welcome-footnote">
-              <ShieldCheck size={13} />
-              Private by design. Yours to keep.
-            </span>
           </div>
-        ) : article.isPending ? (
+          <div
+            className={"article-list " + (settings.list_display || "preview")}
+            aria-label="Article list"
+            tabIndex={0}
+          >
+            {articles.error && (
+              <div className="inline-error" role="alert">
+                {articles.error.message}
+                <button onClick={() => articles.refetch()}>Try again</button>
+              </div>
+            )}
+            {articles.isPending ? (
+              <div className="list-empty">
+                <Loader2 className="spin" size={22} />
+                <p>Gathering your articles…</p>
+              </div>
+            ) : !items.length ? (
+              <div className="list-empty">
+                <Leaf size={27} />
+                <h3>
+                  {q
+                    ? "No matches yet"
+                    : data.feeds.length
+                      ? "A quiet moment."
+                      : "A fresh start."}
+                </h3>
+                <p>
+                  {q
+                    ? "Try a different word or turn off unread only."
+                    : data.feeds.length
+                      ? "You’re all caught up here. New articles will arrive automatically."
+                      : "The things you love to read will find a home here."}
+                </p>
+                {!data.feeds.length && (
+                  <button onClick={() => setModal("subscribe")}>
+                    Add a subscription <ArrowUpRight size={14} />
+                  </button>
+                )}
+              </div>
+            ) : (
+              [...groups].map(([id, group]) => (
+                <section key={id} className="article-group">
+                  <button
+                    className="group-heading"
+                    onClick={() =>
+                      setCollapsed({
+                        ...collapsed,
+                        ["list" + id]: !collapsed["list" + id],
+                      })
+                    }
+                  >
+                    {collapsed["list" + id] ? (
+                      <ChevronRight size={13} />
+                    ) : (
+                      <ChevronDown size={13} />
+                    )}
+                    <Folder size={13} />
+                    <span>{folderPath(id)}</span>
+                    <span>{group.length}</span>
+                  </button>
+                  {!collapsed["list" + id] &&
+                    group.map((item) => (
+                      <button
+                        key={item.id}
+                        className={
+                          "article-row " +
+                          (selected === item.id ? "selected " : "") +
+                          (item.read ? "read" : "unread")
+                        }
+                        onClick={() => open(item)}
+                        aria-current={selected === item.id ? "true" : undefined}
+                      >
+                        <div className="row-meta">
+                          <span className="source">{item.feed_title}</span>
+                          <span>{date(item.published)}</span>
+                        </div>
+                        <div className="row-title">
+                          <span className="unread-dot" />
+                          <h3>{item.title}</h3>
+                          {!!item.starred && (
+                            <Star
+                              size={13}
+                              className="starred"
+                              fill="currentColor"
+                            />
+                          )}
+                        </div>
+                        {settings.list_display !== "title" && (
+                          <p>
+                            {item.excerpt ||
+                              "Open this article to start reading."}
+                          </p>
+                        )}
+                        {settings.list_display !== "title" && (
+                          <div className="row-bottom">
+                            <span>
+                              {Math.max(1, Math.ceil(item.words / 230))} min
+                              read
+                            </span>
+                            {item.tags.slice(0, 2).map((t) => (
+                              <span className="tag" key={t}>
+                                {t}
+                              </span>
+                            ))}
+                            {!!item.duplicate && (
+                              <span className="tag">Similar story</span>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                </section>
+              ))
+            )}
+            {(count > 100 || offset > 0) && (
+              <div className="pagination">
+                <button
+                  disabled={!offset}
+                  onClick={() => setOffset(Math.max(0, offset - 100))}
+                >
+                  <ChevronLeft size={16} />
+                  Previous
+                </button>
+                <span>
+                  {offset + 1}–{Math.min(offset + 100, count)}
+                </span>
+                <button
+                  disabled={offset + 100 >= count}
+                  onClick={() => setOffset(offset + 100)}
+                >
+                  Next
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        {!selected ? null : article.isPending ? (
           <div className="loading">
             <Loader2 className="spin" />
             <p>Opening article…</p>
@@ -2328,7 +2434,9 @@ function FeedEditor({ feed: f, data, act, onBack }) {
       <p className="muted">
         Last checked:{" "}
         {f.checked ? new Date(f.checked).toLocaleString() : "Not yet"}. Backfill
-        uses the saved archive URL and follows available next-page links.
+        automatically discovers exposed history (including Substack archives),
+        or uses your saved archive feed URL. One archive request per minute;
+        progress and pause/resume are shown above the article list.
       </p>
     </form>
   );

@@ -27,8 +27,12 @@ def test_navigation_survives_an_empty_unread_list(lab):
     expect(p.locator(".reading-content h1")).to_have_text("First")
     p.keyboard.press("k")
     expect(p.locator(".reading-content h1")).to_have_text("First")
+    p.get_by_role("button", name="Back to list", exact=True).click()
     p.get_by_role("button", name="Unread only", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(2)
+    p.keyboard.press("j")
+    # Returning to the list and changing its filter starts at the first item.
+    expect(p.locator(".reading-content h1")).to_have_text("First")
     p.keyboard.press("j")
     expect(p.locator(".reading-content h1")).to_have_text("Second")
 
@@ -45,6 +49,7 @@ def test_navigation_skips_collapsed_article_groups(lab):
     expect(p.locator(".article-row h3")).to_have_text(["Visible article"])
     p.keyboard.press("j")
     expect(p.locator(".reading-content h1")).to_have_text("Visible article")
+    p.get_by_role("button", name="Back to list", exact=True).click()
     p.locator(".group-heading").filter(has_text="Alpha").click()
     expect(p.locator(".article-row")).to_have_count(2)
     first_visible = p.locator(".article-row h3").first.inner_text()

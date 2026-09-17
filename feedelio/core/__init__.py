@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 import regex
+import requests
 from bs4 import BeautifulSoup
 from defusedxml.ElementTree import fromstring
 from markdownify import markdownify
@@ -30,6 +31,7 @@ from reader import make_reader
 from reader._parser.jsonfeed import JSONFeedParser
 from reader.discover import from_http_response
 
+from . import backfill as archives
 from .content import (
     clean_url,
     embed_url,
@@ -69,6 +71,8 @@ DEFAULTS = dict(
     retention_days=90,
     invidious="",
     rsshub="https://rsshub.app",
+    sidebar_width=320,
+    list_display="preview",
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 
@@ -167,6 +171,8 @@ class Core:
         if set(values) - DEFAULTS.keys():
             raise ValueError("Unknown setting.")
         merged = self.settings() | values
+        if merged["list_display"] not in ("title", "preview"):
+            raise ValueError("Invalid article list display.")
         if merged["theme"] not in ("system", "light", "dark") or merged["font"] not in (
             "serif",
             "sans",
@@ -178,6 +184,7 @@ class Core:
             ("line_height", 1.4, 2.2),
             ("width", 45, 75),
             ("retention_days", 0, 36500),
+            ("sidebar_width", 260, 600),
         ]:
             if not isinstance(merged[key], (int, float)) or not lo <= merged[key] <= hi:
                 raise ValueError(f"{key} must be between {lo} and {hi}.")
@@ -278,6 +285,7 @@ class Core:
             counts=counts,
             settings=self.settings(),
             jobs=self.rows("SELECT * FROM jobs ORDER BY created DESC LIMIT 30"),
+            backfills=self.rows("SELECT * FROM jobs WHERE kind='backfill' ORDER BY created DESC"),
             downloads=self.rows("SELECT * FROM jobs WHERE kind='download' ORDER BY created DESC"),
             undo=self.rows("SELECT id,label FROM undo ORDER BY created DESC LIMIT 1"),
             worker=self.rows("SELECT value FROM settings WHERE key='worker_heartbeat'"),
@@ -772,6 +780,22 @@ class Core:
             return self._enqueue(kind, payload)
 
     def _enqueue(self, kind, payload):
+        if kind == "backfill":
+            if set(payload) - {"feed_id", "url", "max_pages"}:
+                raise ValueError("Unknown backfill option.")
+            self.one("SELECT id FROM feeds WHERE id=? AND deleted=0", (payload.get("feed_id"),))
+            if payload.get("url"):
+                safe_url(payload["url"])
+            pending = self.rows(
+                "SELECT id FROM jobs WHERE kind='backfill' AND json_extract(payload,'$.feed_id')=? AND status IN ('queued','running','paused','failed') ORDER BY created DESC LIMIT 1",
+                (payload["feed_id"],),
+            )
+            if pending:
+                self.db.execute(
+                    "UPDATE jobs SET status='queued' WHERE id=? AND status IN ('paused','failed')",
+                    (pending[0]["id"],),
+                )
+                return pending[0]
         encoded = json.dumps(payload, sort_keys=True)
         pending = self.rows(
             "SELECT id FROM jobs WHERE kind=? AND payload=? AND status IN ('queued','running')",
@@ -1028,51 +1052,201 @@ class Core:
             self.db.execute("UPDATE jobs SET status='removed' WHERE id=?", (id,))
         return {"ok": True}
 
-    def backfill(self, feed_id, url=None, max_pages=10):
-        f = self.one("SELECT * FROM feeds WHERE id=?", (feed_id,))
-        url = url or f["options"].get("backfill_url") or f["url"]
-        visited = set()
-        pages = 0
-        while url and url not in visited and pages < min(100, max(1, int(max_pages))):
-            safe_url(url)
-            visited.add(url)
-            with self.reader(request_options(f)) as reader:
-                existed = reader.get_feed(url, None) is not None
-                reader.add_feed(url, exist_ok=True)
-                try:
-                    reader.update_feed(url)
-                    for e in reader.get_entries(feed=url):
-                        body = next(
-                            (
-                                text_html(c.value) if c.type == "text/plain" else c.value
-                                for c in e.content
-                                if c.type in ("text/html", "text/xhtml", "text/plain")
-                            ),
-                            e.summary or "",
-                        )
-                        self.ingest(
-                            feed_id,
-                            e.id,
-                            e.title or "",
-                            e.link or "",
-                            body,
-                            e.authors_str,
-                            (e.published or e.updated or e.added).isoformat(),
-                            [dataclasses.asdict(x) for x in e.enclosures],
-                        )
-                finally:
-                    if not existed:
-                        reader.delete_feed(url)
-            data, final, _ = fetch(url, request_options(f))
+    def _archive_fetch(self, url, options):
+        """Use reader's HTTP stack, with the same bounds and credential policy."""
+        with requests.Session() as session:
+            session.trust_env = False
+            session.max_redirects = 10
+            for scheme in ("http://", "https://"):
+                session.mount(scheme, GuardAdapter(options.get("cookie_origin")))
+            session.headers["User-Agent"] = options.get("user_agent") or "Feedelio/0.1"
+            if options.get("cookie"):
+                session.headers["Cookie"] = options["cookie"]
+            if options.get("proxy"):
+                session.proxies = dict(http=options["proxy"], https=options["proxy"])
+            with session.get(url, stream=True, timeout=(5, 30)) as response:
+                response.raise_for_status()
+                data = bytearray()
+                for chunk in response.iter_content(65536):
+                    data.extend(chunk)
+                    if len(data) > 8_000_000:
+                        raise ValueError("Archive response exceeds the 8 MB size limit.")
+                return bytes(data), response.url, response.headers
+
+    def backfill(self, feed_id, url=None, max_pages=None, *, state=None):
+        """One resumable archive step, never an unbounded network loop.
+
+        max_pages is accepted for old queued jobs, but no longer truncates history.
+        The worker, not this parser step, owns pacing and retries.
+        """
+        f = self.one("SELECT * FROM feeds WHERE id=? AND deleted=0", (feed_id,))
+        state = archives.initial(f, url) | (state or {})
+        state["pending"] = list(state.get("pending", []))
+        options = request_options(f)
+        # Skip entries already supplied by the live feed without fetching again.
+        while state["pending"]:
+            post = state["pending"][0]
+            if not self.rows(
+                "SELECT id FROM articles WHERE feed_id=? AND (guid=? OR url=?)",
+                (feed_id, post["guid"], clean_url(post["url"])),
+            ) and not self.rows(
+                "SELECT 1 FROM tombstones WHERE feed_id=? AND guid=?", (feed_id, post["guid"])
+            ):
+                break
+            state["pending"].pop(0)
+        if state["pending"]:
+            post = state["pending"][0]
+            preview = False
             try:
-                next_url = json.loads(data).get("next_url")
-            except (ValueError, AttributeError):
-                soup = BeautifulSoup(data, "xml")
-                link = soup.find("link", rel="next")
-                next_url = link.get("href") if link else None
-            url = urljoin(final, next_url) if next_url else None
-            pages += 1
-        return {"pages": pages, "next_url": url}
+                document = self._archive_fetch(post["url"], options)
+            except requests.HTTPError as exc:
+                if exc.response.status_code not in (404, 410):
+                    raise
+                document = None  # A removed post must not strand the remaining archive.
+            # No optional transcript subrequests: one page is this entire step.
+            try:
+                if document is None:
+                    raise ValueError("Article is no longer available.")
+                article = extract(post["url"], options, document=document, transcripts=False)
+            except ValueError:
+                article = dict(body=text_html(post["summary"]), transcript="", paywall=False)
+                preview = True
+                state["previews"] = state.get("previews", 0) + 1
+            id = self.ingest(
+                feed_id,
+                post["guid"],
+                post["title"],
+                post["url"],
+                article["body"],
+                published=post["published"],
+                transcript=article["transcript"],
+                tags=list(
+                    set(
+                        post["tags"]
+                        + (["paywall"] if article["paywall"] else [])
+                        + (["archive-preview"] if preview else [])
+                    )
+                ),
+            )
+            if id:
+                with self.db:
+                    self.db.execute("UPDATE articles SET extracted=? WHERE id=?", (int(not preview), id))
+                state["articles"] += 1
+            state["pending"].pop(0)
+            return state
+        url = state["next_url"]
+        if not url:
+            return state
+        if url in state["visited"]:
+            raise ValueError("Archive pagination repeats a page; stopped to avoid a request loop.")
+        data, final, headers = self._archive_fetch(url, options)
+        if state["mode"] == "substack":
+            pending, next_url = archives.substack_page(data, final, state["offset"])
+            if pending and all(p["guid"] in state.get("seen_posts", []) for p in pending):
+                raise ValueError("Archive repeats the same posts; pagination may not be supported.")
+            state["seen_posts"] = list(set(state.get("seen_posts", []) + [p["guid"] for p in pending]))
+            state["pending"] = pending
+            state["offset"] += len(pending)
+        else:
+            entries, next_url = archives.feed_page(data, final, headers)
+            for e in entries:
+                body = next(
+                    (
+                        text_html(c.value) if c.type == "text/plain" else c.value
+                        for c in e.content
+                        if c.type in ("text/html", "text/xhtml", "text/plain")
+                    ),
+                    e.summary or "",
+                )
+                before = self.one("SELECT count(*) n FROM articles WHERE feed_id=?", (feed_id,))["n"]
+                self.ingest(
+                    feed_id,
+                    e.id,
+                    e.title or "",
+                    e.link or "",
+                    body,
+                    ", ".join(a.name or "" for a in e.authors),
+                    (e.published or e.updated).isoformat() if (e.published or e.updated) else None,
+                    [dataclasses.asdict(x) for x in e.enclosures],
+                )
+                state["articles"] += (
+                    self.one("SELECT count(*) n FROM articles WHERE feed_id=?", (feed_id,))["n"] - before
+                )
+        state["visited"] = [*state["visited"], url]
+        state["pages"] += 1
+        state["next_url"] = next_url
+        if not next_url and not state["pending"]:
+            state["message"] = (
+                "All exposed archive pages processed."
+                if state["pages"] > 1
+                else "This feed exposes no older-page link. Set an archive feed URL if the publisher provides one."
+            )
+        return state
+
+    def control_backfill(self, id, action):
+        if action not in ("pause", "resume"):
+            raise ValueError("Choose pause or resume.")
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            job = self.one("SELECT * FROM jobs WHERE id=? AND kind='backfill'", (id,))
+            if job["status"] == "done":
+                raise ValueError("This archive is already complete.")
+            self.db.execute(
+                "UPDATE jobs SET status=?,updated=? WHERE id=?",
+                ("paused" if action == "pause" else "queued", now(), id),
+            )
+            if action == "resume":
+                self.db.execute(
+                    "UPDATE jobs SET result=json_set(coalesce(result,'{}'),'$.attempts',0) WHERE id=?",
+                    (id,),
+                )
+        return {"ok": True}
+
+    def _run_backfill(self, job):
+        state = job["result"] or {}
+        try:
+            state = self.backfill(**job["payload"], state=state)
+            state["attempts"] = 0
+            state["not_before"] = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+            status = "queued" if state["next_url"] or state["pending"] else "done"
+            error = None
+        except Exception as exc:
+            from email.utils import parsedate_to_datetime
+
+            state["attempts"] = state.get("attempts", 0) + 1
+            delay = min(3600, 60 * 2 ** min(state["attempts"], 6))
+            response = getattr(exc, "response", None)
+            code = response.status_code if response is not None else None
+            retry = (
+                code in (429, 503)
+                or (code is not None and code >= 500)
+                or isinstance(exc, requests.ConnectionError)
+                or isinstance(exc, requests.Timeout)
+            )
+            retry_after = response.headers.get("Retry-After", "") if response is not None else ""
+            try:
+                delay = max(delay, int(retry_after))
+            except ValueError:
+                try:
+                    delay = max(
+                        delay,
+                        (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds(),
+                    )
+                except (ValueError, TypeError, OverflowError):
+                    pass
+            state["not_before"] = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
+            status = "queued" if retry and state["attempts"] < 5 else "failed"
+            error = str(exc)[:1000]
+        with self.db:
+            # A pause issued during the network call must survive its completion.
+            self.db.execute(
+                "UPDATE jobs SET status=CASE WHEN status='paused' THEN status ELSE ? END,updated=?,result=?,error=? WHERE id=?",
+                (status, now(), json.dumps(state), error, job["id"]),
+            )
+            self.db.execute(
+                "INSERT OR REPLACE INTO settings VALUES('archive_next_request',?)",
+                (json.dumps(state["not_before"]),),
+            )
 
     def purge(self):
         count = 0
@@ -1130,11 +1304,35 @@ class Core:
             self.enqueue("purge")
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            jobs = self.rows("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1")
+            # Seed existing subscriptions too, once, after a successful refresh.
+            for feed in self.rows("""
+                SELECT id FROM feeds f WHERE deleted=0 AND checked IS NOT NULL
+                AND url LIKE 'http%' AND coalesce(json_extract(options,'$.scrape_selector'),'')=''
+                AND NOT EXISTS (SELECT 1 FROM jobs j WHERE kind='backfill'
+                    AND json_extract(j.payload,'$.feed_id')=f.id)
+            """):
+                self._enqueue("backfill", {"feed_id": feed["id"]})
+            jobs = self.rows(
+                """
+                SELECT * FROM jobs j WHERE status='queued' AND (
+                    kind!='backfill' OR (
+                        coalesce(json_extract(result,'$.not_before'),'')<=?
+                        AND coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='archive_next_request'),'')<=?
+                        AND EXISTS(SELECT 1 FROM feeds f WHERE f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0)
+                    )
+                ) ORDER BY updated,created LIMIT 1
+            """,
+                (now(), now()),
+            )
             if not jobs:
                 return False
             job = jobs[0]
             self.db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (now(), job["id"]))
+            if job["kind"] == "backfill":
+                self.db.execute(
+                    "INSERT OR REPLACE INTO settings VALUES('archive_next_request',?)",
+                    (json.dumps((datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()),),
+                )
         try:
             p = job["payload"]
             if job["kind"] == "refresh":
@@ -1144,7 +1342,8 @@ class Core:
             elif job["kind"] == "download":
                 result = self.download(**p, job_id=job["id"])
             elif job["kind"] == "backfill":
-                result = self.backfill(**p)
+                self._run_backfill(job)
+                return True
             elif job["kind"] == "rules":
                 result = self.reapply_rules()
             else:
@@ -1437,6 +1636,7 @@ class Core:
             "save_rule",
             "delete_rule",
             "enqueue",
+            "control_backfill",
             "import_opml",
             "restore",
             "chrome_sync",

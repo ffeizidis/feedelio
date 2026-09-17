@@ -75,6 +75,7 @@ def test_four_formats_opml_polling_conditional_get_and_bad_feed(lab):
     child = next(f for f in lab.api("overview")["folders"] if f["name"] == "Child")
     assert child["parent_id"] == parent["id"]
     assert next(f for f in lab.api("overview")["feeds"] if f["title"] == "Broken")["health"] == "error"
+    p.get_by_role("button", name="Back to list", exact=True).click()
     p.get_by_role("button", name="Refresh feeds (R)", exact=True).click()
     lab.finish_jobs()
     headers = [r["headers"] for r in lab.requests if r["path"] == "/rss"][-1]
@@ -95,6 +96,7 @@ def test_read_save_undo_history_sort_and_statistics(lab):
     expect(p.locator(".article-tools").get_by_role("button", name="Unread", exact=True)).to_be_visible()
     p.keyboard.press("u")
     expect(p.locator(".article-tools").get_by_role("button", name="Read", exact=True)).to_be_visible()
+    p.get_by_role("button", name="Back to list", exact=True).click()
     p.get_by_role("button", name="Mark this stream as read", exact=True).click()
     lab.until(lambda: lab.api("overview")["counts"]["unread"] == 0)
     p.keyboard.press("u")
@@ -348,6 +350,7 @@ def test_full_text_canonical_paywall_rewrite_transcript_search_and_obsidian(lab)
     assert "paywall" in lab.api("articles/" + lab.api("articles")["items"][0]["id"])["tags"]
     p.get_by_role("textbox", name="Search articles").fill("magnetospheres")
     expect(p.locator(".article-row")).to_have_count(1)
+    lab.open_title("Summary article")
     with p.expect_download() as download:
         p.get_by_role("link", name="Obsidian / Markdown", exact=True).click()
     text = __import__("pathlib").Path(download.value.path()).read_text()
@@ -512,7 +515,7 @@ def test_retention_and_archive_backfill_through_ui(lab):
     p.get_by_role("button", name="Save feed settings", exact=True).click()
     p.get_by_role("button", name="Edit Audit feed", exact=True).click()
     p.get_by_role("button", name="Backfill archive", exact=True).click()
-    lab.finish_jobs()
+    lab.finish_jobs(archives=True)
     lab.close()
     p.reload()
     expect(p.locator(".article-row")).to_have_count(4)

@@ -1,6 +1,6 @@
 # Feedelio
 
-A private, single-user, keyboard-first desktop RSS reader. The left pane combines your folder tree, subscriptions and folder-grouped article list; the right pane is for reading. No mobile layout or multi-user accounts.
+A private, single-user, keyboard-first desktop RSS reader. The left pane contains your folders and subscriptions; the right pane shows the selected stream's article list or the opened article. Drag the divider to resize, choose titles or previews, and use **Back to list** (or Escape) to return. Both list and article body scroll independently within the desktop shell. No mobile layout or multi-user accounts.
 
 ## Run with Docker
 
@@ -73,7 +73,7 @@ All requested areas have an implementation. Integrations that depend on a publis
 | 28–30, 33–35: content processing | Queued Trafilatura extraction; custom CSS selectors; sanitization; small/hidden pixel removal; UTM and known click-ID stripping; custom UA, cookies and HTTP proxy; timed regex rewrite rules; canonical URL resolution and structured-data paywall detection. |
 | 31–32: duplicates and rules | Near-identical recent cross-feed titles can be hidden; saved stories remain visible. Ordered match → read/star/tag/drop/rewrite rules, per feed or global; presets for Shorts URLs and detected paywall tags. Rules can be reapplied to stored articles. |
 | 36–40: video, podcasts and supplied transcripts | Channel discovery and RSS subscriptions, click-to-load youtube-nocookie or configured Invidious player, audio enclosure playback, durable download/retry queue and server-local playback. Podcast transcript links, page transcript selectors/caption tracks, and caption URLs supplied by YouTube's page are supported. No ASR. |
-| 41, 46: retention and archives | Retention purges old **read, unstarred** items; unread/starred items and archive-enabled feeds are protected. Tombstones prevent purged GUIDs from returning. Backfill accepts an archive feed and follows JSON `next_url` or Atom `rel=next`, up to 10 pages by default (100 maximum via core API). |
+| 41, 46: retention and archives | Retention purges old **read, unstarred** items; unread/starred items and archive-enabled feeds are protected. Tombstones prevent purged GUIDs from returning. Durable backfill follows JSON `next_url`, RSS/Atom `rel=next` / `prev-archive`, and public Substack archives, without a 10/100-page cap. |
 | 43: full JSON backup | One restorable JSON file includes subscriptions, folders, articles, transcripts, tags, states, settings, rules, history, undo, jobs, tombstones and base64-encoded downloaded episodes. Restore requires an empty library. |
 | 44–45: habits and data saver | Per-feed read/saved totals, daily open events and reading-time estimates. Images/favicons disabled by default; per-article image loading; audio does not preload and video loads only on click. |
 | 47–49: adding new sources | Companion extension toolbar opens subscription discovery for the current page. RSSHub instance/routes and newsletter-bridge URLs are ordinary subscriptions. CSS story-card and link selectors create a local synthetic stream from a page without a feed. |
@@ -87,7 +87,8 @@ All requested areas have an implementation. Integrations that depend on a publis
 - Paywall detection uses `isAccessibleForFree: false` in source-page JSON-LD after extraction. Feed-text rules can catch other signals. Canonical resolution does not unlock subscription-only content. Enable automatic extraction on feeds where these tags should be detected automatically.
 - YouTube feed items usually link to `/watch`; Shorts filtering catches items whose URL identifies `/shorts/`. The feed does not reliably label every Short, so the preset cannot classify all short videos.
 - Captions must actually be provided and accessible. YouTube page formats and third-party Invidious/RSSHub availability can change. There is no audio-to-text generation or guaranteed transcript availability.
-- Backfill can only retrieve history the publisher exposes. It cannot invent an archive beyond available feeds or pagination. Scrapers operate on server-rendered HTML; JavaScript-only sites need an external feed bridge.
+- Backfill starts automatically after the first successful refresh, including existing subscriptions on upgrade. It makes at most one archive-page/article operation per minute across the worker, checkpoints after every step, and yields to other jobs between steps. HTTP redirects can require additional requests within an operation. Substack listings are fetched 20 at a time, then missing article pages individually; existing articles are skipped. Progress, pause/resume and errors appear above the article list. Transient failures use exponential backoff and honor `Retry-After`, stopping after five failed attempts until resumed. Backups include progress and pacing deadlines.
+- Backfill can only retrieve history the publisher exposes. A feed without pagination reports that explicitly; configure **Archive feed URL** when available. Substack support uses its public archive endpoint on `*.substack.com`; custom domains without feed pagination need an explicit archive feed. It does not unlock paywalls, solve anti-bot challenges, or guarantee full text for every post; accessible body/preview text is stored. Scrapers operate on server-rendered HTML; JavaScript-only sites need an external feed bridge.
 - Offline episodes are offline **on the server**; the browser still needs a connection to Feedelio. JSON backups containing audio can be large and are assembled in memory; for large libraries, also take a stopped-container volume snapshot. Default JSON import limit: 2 GiB, configurable with `FEEDELIO_MAX_IMPORT_MB`.
 
 ## Keyboard shortcuts
@@ -104,6 +105,9 @@ All requested areas have an implementation. Integrations that depend on a publis
 | R | Queue refresh |
 | A | Add subscription |
 | ? | Shortcut guide |
+| Escape | Back to the list / clear search |
+
+Focus the pane divider and use Left/Right (20 px steps), Home or End to resize without a mouse. Divider width and title/preview preference are saved in the library.
 
 Shortcuts pause while typing or using a dialog. At 200% zoom the fixed desktop shell may scroll horizontally; it never changes into a mobile layout.
 
@@ -156,6 +160,8 @@ Backups contain your feed cookie/proxy settings as well as reading data. Keep ex
 Token-free access is limited to direct loopback clients using a loopback hostname. Docker bridge peers and reverse proxies must use a token even when published on localhost; `Host: localhost` alone is not proof of a local client. Keep Uvicorn's forwarded-header trust restricted to your actual trusted proxy. Before upgrading an older token-free Docker installation, configure `FEEDELIO_TOKEN`; your volume and library remain unchanged.
 
 ## Verification
+
+The [pane and archive update](audit/PANES_ARCHIVE.md) records 100 regression tests, 45 browser scenarios, Docker validation and isolated live-source checks for the revised layout and paced backfill.
 
 The [adversarial browser audit](audit/REPORT.md) records the ten reproduced defects, their verified fixes, and a 52-feature coverage matrix with explicit limitations. Run its separate real-browser suite with `uv run pytest audit -q`; all scenarios are expected to pass. Passing fixture-backed checks is not a feature-completeness certificate.
 

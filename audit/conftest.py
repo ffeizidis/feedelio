@@ -60,7 +60,8 @@ def playwright():
 
 @pytest.fixture(scope="session")
 def browser(playwright):
-    browser = playwright.chromium.launch()
+    # Headless Chromium normally hides scrollbars, masking desktop layout defects.
+    browser = playwright.chromium.launch(ignore_default_args=["--hide-scrollbars"])
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     (ARTIFACTS / "environment.json").write_text(
         json.dumps({"chromium": browser.version, "python": sys.version, "viewport": [1440, 1000]}, indent=2)
@@ -104,10 +105,15 @@ class Lab:
                 stderr=self.logs,
             )
 
-    def finish_jobs(self):
+    def finish_jobs(self, archives=False):
         self.start_worker()
         self.until(
-            lambda: not any(j["status"] in ("queued", "running") for j in self.api("overview")["jobs"])
+            lambda: (
+                not any(
+                    j["status"] in ("queued", "running") and (archives or j["kind"] != "backfill")
+                    for j in self.api("overview")["jobs"]
+                )
+            )
         )
 
     def show(self):
@@ -169,6 +175,9 @@ class Lab:
         return feed
 
     def open_title(self, title):
+        back = self.page.get_by_role("button", name="Back to list", exact=True)
+        if back.is_visible():
+            back.click()
         self.page.locator(".article-row").filter(
             has=self.page.get_by_role("heading", name=title, exact=True)
         ).click()

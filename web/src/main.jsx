@@ -54,6 +54,16 @@ import "./style.css";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });
+// A CSP change needs a new document. Preserve the reading position for that
+// one reload, without persisting article bodies or credentials in the browser.
+let resume = {};
+try {
+  resume =
+    JSON.parse(sessionStorage.getItem("feedelio-policy-resume") || "{}") || {};
+  sessionStorage.removeItem("feedelio-policy-resume");
+} catch {
+  /* An unavailable session store only loses the reading position. */
+}
 async function api(path, body) {
   const response = await fetch(
     "/api/" + path,
@@ -143,11 +153,11 @@ function App() {
     queryFn: () => api("overview"),
     refetchInterval: 10000,
   });
-  const [view, setView] = useState("all"),
-    [scope, setScope] = useState({}),
-    [q, setQ] = useState(""),
-    [offset, setOffset] = useState(0);
-  const [selected, setSelected] = useState(null),
+  const [view, setView] = useState(resume.view || "all"),
+    [scope, setScope] = useState(resume.scope || {}),
+    [q, setQ] = useState(resume.q || ""),
+    [offset, setOffset] = useState(resume.offset || 0);
+  const [selected, setSelected] = useState(resume.selected || null),
     [collapsed, setCollapsed] = useState({}),
     [modal, setModal] = useState(
       new URLSearchParams(location.search).has("subscribe")
@@ -157,10 +167,12 @@ function App() {
   const [toast, setToast] = useState(null),
     [busy, setBusy] = useState(0),
     [loadImages, setLoadImages] = useState(false),
-    [playVideo, setPlayVideo] = useState(false);
+    [playVideo, setPlayVideo] = useState(!!resume.playVideo),
+    [reloadPolicy, setReloadPolicy] = useState(false);
   const [token, setToken] = useState("");
   const searchRef = useRef(null),
-    readingRef = useRef(null);
+    readingRef = useRef(null),
+    navigation = useRef({ key: null, items: [], index: -1 });
   const data = overview.data,
     settings = data?.settings || {};
   const deferredQ = useDeferredValue(q);
@@ -187,12 +199,37 @@ function App() {
   });
   const items = articles.data?.items || [],
     a = article.data;
+  // The hide-read preference can arrive after the first keypress. Reset on the
+  // user's toggle, not on its asynchronous response, so it cannot erase history.
+  const navigationKey = JSON.stringify([
+    { ...params, unread: undefined },
+    collapsed,
+  ]);
+  const groups = new Map();
+  for (const item of items) {
+    if (!groups.has(item.folder_id)) groups.set(item.folder_id, []);
+    groups.get(item.folder_id).push(item);
+  }
+  const visibleItems = [...groups].flatMap(([id, group]) =>
+    collapsed["list" + id] ? [] : group,
+  );
+  const navigationItems =
+    navigation.current.key === navigationKey
+      ? navigation.current.items
+      : visibleItems;
   const refresh = () => cache.invalidateQueries();
   const notify = (message, error = false) => setToast({ message, error });
   async function act(name, payload, message) {
     setBusy((n) => n + 1);
     try {
       const result = await cmd(name, payload);
+      if (
+        name === "save_settings" &&
+        payload.values.invidious !== undefined &&
+        payload.values.invidious !== (settings.invidious || "")
+      ) {
+        setReloadPolicy(true);
+      }
       await refresh();
       if (message) notify(message);
       return result;
@@ -204,24 +241,59 @@ function App() {
     }
   }
   const run = (...args) => act(...args).catch(() => {});
-  const pref = (key, value) =>
-    run("save_settings", { values: { [key]: value } });
-  function open(item) {
+  const pref = (key, value) => {
+    if (key === "hide_read") navigation.current.key = null;
+    return run("save_settings", { values: { [key]: value } });
+  };
+  function open(item, navigating = false) {
+    if (!navigating) {
+      navigation.current = {
+        key: navigationKey,
+        items: visibleItems,
+        index: visibleItems.findIndex((x) => x.id === item.id),
+      };
+    }
     setSelected(item.id);
     setLoadImages(false);
     setPlayVideo(false);
     run("change_articles", { ids: [item.id], read: true, opened: true });
   }
   function navigate(delta) {
-    const index = items.findIndex((x) => x.id === selected);
-    const next = items[index + delta] || (!selected ? items[0] : null);
-    if (next) open(next);
+    // Keep this reading session's displayed order after opened items disappear
+    // from unread-only. A different stream/filter/page starts a fresh session.
+    if (navigation.current.key !== navigationKey) {
+      navigation.current = {
+        key: navigationKey,
+        items: visibleItems,
+        index: visibleItems.findIndex((x) => x.id === selected),
+      };
+    }
+    const trail = navigation.current;
+    const index = trail.index < 0 ? 0 : trail.index + delta;
+    const next = trail.items[index];
+    if (next) {
+      trail.index = index;
+      open(next, true);
+    }
   }
   function stream(nextView, nextScope = {}) {
     setView(nextView);
     setScope(nextScope);
     setOffset(0);
   }
+  useEffect(() => {
+    if (reloadPolicy && !modal) {
+      try {
+        sessionStorage.setItem(
+          "feedelio-policy-resume",
+          JSON.stringify({ view, scope, q, offset, selected, playVideo }),
+        );
+      } catch {
+        /* Reload remains safe without storage. */
+      }
+      location.reload();
+    }
+  }, [reloadPolicy, modal]);
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme || "system";
   }, [settings.theme]);
@@ -349,12 +421,6 @@ function App() {
         history: "Recently read",
       }[view];
   const count = articles.data?.total || 0;
-  const groups = new Map();
-  for (const item of items) {
-    const id = item.folder_id;
-    if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push(item);
-  }
   const folderPath = (id) => {
     const parts = [],
       seen = new Set();
@@ -749,13 +815,13 @@ function App() {
             <IconButton
               icon={ChevronLeft}
               label="Previous article (K)"
-              disabled={!items.length}
+              disabled={!navigationItems.length}
               onClick={() => navigate(-1)}
             />
             <IconButton
               icon={ChevronRight}
               label="Next article (J)"
-              disabled={!items.length}
+              disabled={!navigationItems.length}
               onClick={() => navigate(1)}
             />
           </div>
@@ -935,9 +1001,14 @@ function App() {
                           controls
                           preload="none"
                           src={
-                            a.downloads.find((d) => d.status === "done")
+                            a.downloads.find(
+                              (d) => d.status === "done" && d.url === e.href,
+                            )
                               ? "/api/downloads/" +
-                                a.downloads.find((d) => d.status === "done").id
+                                a.downloads.find(
+                                  (d) =>
+                                    d.status === "done" && d.url === e.href,
+                                ).id
                               : e.href
                           }
                         />

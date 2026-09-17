@@ -57,8 +57,11 @@ async def protect(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
+    with Core() as core:
+        frames = core.frame_sources()
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' https: http:; frame-src https:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' https: http:; "
+        f"frame-src {frames}; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     )
     if path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"

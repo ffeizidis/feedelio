@@ -1,0 +1,559 @@
+{
+  "date": "2026-09-17",
+  "timezone": "Europe/Athens",
+  "baseline_application_commit": "47f1e19",
+  "application_revision": "Fixes committed alongside this snapshot",
+  "command": ".venv/bin/pytest audit -q",
+  "chromium": "153.0.8010.12",
+  "python": "3.12.3",
+  "elapsed_seconds": 142.23,
+  "total": 38,
+  "passed": 38,
+  "failed": 0,
+  "skipped": 0,
+  "regression_suite": {
+    "command": ".venv/bin/pytest tests -q",
+    "passed": 49,
+    "failed": 0,
+    "warnings": 4,
+    "elapsed_seconds": 19.7
+  },
+  "docker": {
+    "image": "feedelio:audit-fixes",
+    "image_id": "e72055309cad",
+    "build": "passed",
+    "isolated_smoke": "frontend, API, worker heartbeat and CSP passed; temporary container removed"
+  },
+  "feature_numbers": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52
+  ],
+  "cases": [
+    {
+      "test": "test_four_formats_opml_polling_conditional_get_and_bad_feed",
+      "features": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        14,
+        19,
+        25
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 12.199017575010657,
+      "failure": ""
+    },
+    {
+      "test": "test_read_save_undo_history_sort_and_statistics",
+      "features": [
+        8,
+        9,
+        11,
+        12,
+        13,
+        26,
+        27,
+        44
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.6896037659898866,
+      "failure": ""
+    },
+    {
+      "test": "test_keyboard_follows_visible_folder_group_order",
+      "features": [
+        8,
+        13
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.27769678400363773,
+      "failure": ""
+    },
+    {
+      "test": "test_unread_keyboard_can_go_back_after_opening",
+      "features": [
+        8,
+        9,
+        13
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.30376782499661203,
+      "failure": ""
+    },
+    {
+      "test": "test_typography_theme_and_persistence_at_200_percent",
+      "features": [
+        10,
+        21,
+        22,
+        45
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.0157457099994645,
+      "failure": ""
+    },
+    {
+      "test": "test_nested_folder_cycle_bulk_rename_move_delete_undo",
+      "features": [
+        7,
+        14,
+        15,
+        24,
+        25,
+        26
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.098944740006118,
+      "failure": ""
+    },
+    {
+      "test": "test_discovery_request_options_and_permanent_migration",
+      "features": [
+        17,
+        18,
+        23,
+        30,
+        47
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.428379749006126,
+      "failure": ""
+    },
+    {
+      "test": "test_discovery_does_not_offer_html_as_a_feed",
+      "features": [
+        17,
+        49
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.2885540089919232,
+      "failure": ""
+    },
+    {
+      "test": "test_xss_tracking_stripping_and_no_image_requests_before_opt_in",
+      "features": [
+        16,
+        29,
+        45
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.9457675049925456,
+      "failure": ""
+    },
+    {
+      "test": "test_css_sized_tracking_pixel_is_removed",
+      "features": [
+        29,
+        45
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.7128245460044127,
+      "failure": ""
+    },
+    {
+      "test": "test_full_text_canonical_paywall_rewrite_transcript_search_and_obsidian",
+      "features": [
+        20,
+        21,
+        28,
+        32,
+        33,
+        34,
+        35,
+        40,
+        42,
+        50
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.6644977340038167,
+      "failure": ""
+    },
+    {
+      "test": "test_duplicate_recovers_when_original_feed_is_deleted",
+      "features": [
+        31,
+        11,
+        26
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.3976705600071,
+      "failure": ""
+    },
+    {
+      "test": "test_rules_star_tag_drop_short_and_timeout",
+      "features": [
+        11,
+        31,
+        32,
+        34
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.48730130099284,
+      "failure": ""
+    },
+    {
+      "test": "test_video_is_click_to_load_and_uses_configured_invidious",
+      "features": [
+        36,
+        38,
+        45
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.5800949469994521,
+      "failure": ""
+    },
+    {
+      "test": "test_real_audio_download_offline_playback_and_full_backup",
+      "features": [
+        37,
+        39,
+        40,
+        42,
+        43
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 11.594390222002403,
+      "failure": ""
+    },
+    {
+      "test": "test_malformed_opml_is_atomic",
+      "features": [
+        6,
+        43
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.2722408810077468,
+      "failure": ""
+    },
+    {
+      "test": "test_retention_and_archive_backfill_through_ui",
+      "features": [
+        41,
+        46,
+        24
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 21.79911209299462,
+      "failure": ""
+    },
+    {
+      "test": "test_rsshub_route_and_css_site_scraper_from_add_dialog",
+      "features": [
+        48,
+        49,
+        33
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.877261277011712,
+      "failure": ""
+    },
+    {
+      "test": "test_hostile_search_bad_rules_and_backend_remains_responsive",
+      "features": [
+        20,
+        26,
+        32,
+        43
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.2983118219999596,
+      "failure": ""
+    },
+    {
+      "test": "test_navigation_survives_an_empty_unread_list",
+      "features": [
+        8,
+        9,
+        13
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.3540413060109131,
+      "failure": ""
+    },
+    {
+      "test": "test_navigation_skips_collapsed_article_groups",
+      "features": [
+        7,
+        8,
+        13
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.2912477130012121,
+      "failure": ""
+    },
+    {
+      "test": "test_changing_manual_interval_reschedules_existing_feed",
+      "features": [
+        18,
+        5
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.049766272000852,
+      "failure": ""
+    },
+    {
+      "test": "test_feed_fetch_uses_real_http_proxy",
+      "features": [
+        30
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.5631742139958078,
+      "failure": ""
+    },
+    {
+      "test": "test_quiet_feed_detection_in_browser",
+      "features": [
+        19
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.20334070699755102,
+      "failure": ""
+    },
+    {
+      "test": "test_pagination_search_and_filter_reset",
+      "features": [
+        8,
+        13,
+        20
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.3816822919907281,
+      "failure": ""
+    },
+    {
+      "test": "test_regex_timeout_does_not_wedge_worker_or_browser",
+      "features": [
+        32,
+        34
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.1257299629942281,
+      "failure": ""
+    },
+    {
+      "test": "test_invalid_restore_rolls_back_and_allows_retry",
+      "features": [
+        43
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.250820601999294,
+      "failure": ""
+    },
+    {
+      "test": "test_bulk_mark_read_does_not_claim_unopened_articles_as_reading_history",
+      "features": [
+        12,
+        26,
+        27,
+        44
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.3128065610071644,
+      "failure": ""
+    },
+    {
+      "test": "test_feed_folder_mark_all_and_article_delete_undo",
+      "features": [
+        7,
+        9,
+        12,
+        14,
+        25,
+        26
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.4811577850050526,
+      "failure": ""
+    },
+    {
+      "test": "test_linkless_hash_entries_remain_distinct",
+      "features": [
+        4,
+        1
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 11.13252341900079,
+      "failure": ""
+    },
+    {
+      "test": "test_multiple_audio_enclosures_keep_their_own_download",
+      "features": [
+        37,
+        39
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.9946467330009909,
+      "failure": ""
+    },
+    {
+      "test": "test_private_login_session_and_cross_origin_mutation",
+      "features": [
+        43,
+        51
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.563153882001643,
+      "failure": ""
+    },
+    {
+      "test": "test_worker_polls_due_feed_without_manual_refresh",
+      "features": [
+        5,
+        18
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 10.439019758996437,
+      "failure": ""
+    },
+    {
+      "test": "test_automatic_readability_and_provided_caption_track",
+      "features": [
+        28,
+        40,
+        42
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.0848078730050474,
+      "failure": ""
+    },
+    {
+      "test": "test_configured_local_invidious_is_actually_loaded",
+      "features": [
+        38
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.5662278329982655,
+      "failure": ""
+    },
+    {
+      "test": "test_restore_full_library_via_browser_and_export_opml",
+      "features": [
+        6,
+        7,
+        11,
+        22,
+        25,
+        43
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.6432279750006273,
+      "failure": ""
+    },
+    {
+      "test": "test_mcp_actions_are_visible_in_real_browser",
+      "features": [
+        11,
+        20,
+        42,
+        51
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 0.9468439460033551,
+      "failure": ""
+    },
+    {
+      "test": "test_real_chromium_extension_reading_list_round_trip",
+      "features": [
+        47,
+        52,
+        9,
+        26
+      ],
+      "outcome": "passed",
+      "phase": "call",
+      "seconds": 1.2000577620055992,
+      "failure": ""
+    }
+  ]
+}

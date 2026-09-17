@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import io
 import json
 import math
 import os
@@ -26,11 +27,23 @@ from defusedxml.ElementTree import fromstring
 from markdownify import markdownify
 from rapidfuzz.fuzz import ratio
 from reader import make_reader
+from reader._parser.jsonfeed import JSONFeedParser
 from reader.discover import from_http_response
 from requests.adapters import HTTPAdapter
 
-from .content import clean_url, embed_url, extract, fetch, fingerprint, plain, safe_url, sanitize, text_html
-from .reader_extensions import BoundedParser
+from .content import (
+    clean_url,
+    embed_url,
+    extract,
+    fetch,
+    fingerprint,
+    local_frame_origin,
+    plain,
+    safe_url,
+    sanitize,
+    text_html,
+)
+from .reader_extensions import BoundedParser, ExtendedFeedparser
 
 
 def now():
@@ -81,6 +94,9 @@ class Core:
         (self.root / "downloads").mkdir(exist_ok=True)
         self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
         self.db.row_factory = sqlite3.Row
+        self.db.create_function(
+            "title_similarity", 2, lambda a, b: ratio(a.casefold(), b.casefold()), deterministic=True
+        )
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
         self.db.commit()
@@ -158,12 +174,20 @@ class Core:
                 raise ValueError(f"{key} must be between {lo} and {hi}.")
         if merged["invidious"]:
             safe_url(merged["invidious"])
+            local_frame_origin(merged["invidious"])
         with self.db:
             self.db.executemany(
                 "INSERT OR REPLACE INTO settings VALUES (?,?)",
                 [(k, json.dumps(v)) for k, v in values.items()],
             )
         return self.settings()
+
+    def frame_sources(self):
+        try:
+            origin = local_frame_origin(self.settings()["invidious"])
+        except ValueError:
+            origin = ""
+        return "https:" + (" " + origin if origin else "")
 
     def folders(self):
         return self.rows("SELECT * FROM folders ORDER BY name COLLATE NOCASE")
@@ -264,32 +288,48 @@ class Core:
                     }
                 ]
         links = from_http_response(final, data, headers)
-        return [{"url": link.href, "title": link.title or link.href} for link in links] or [
-            {"url": final, "title": final}
-        ]
+        if links:
+            return [{"url": link.href, "title": link.title or link.href} for link in links]
+        # Validate a direct feed with the same parsers as retrieval, without
+        # subscribing or fetching it a second time. MIME alone is not evidence.
+        parser = JSONFeedParser() if data.lstrip().startswith(b"{") else ExtendedFeedparser()
+        try:
+            feed, entries = parser(final, io.BytesIO(data), headers)
+            list(entries)
+        except Exception as error:
+            raise ValueError(
+                "No feed found. Try an explicit feed URL or configure a site scraper."
+            ) from error
+        return [{"url": final, "title": feed.title or final}]
 
     def subscribe(self, url, folder_id="inbox", title="", options=None):
         safe_url(url)
+        options = self.validate_options(options or {})
+        with self.db:
+            return self._subscribe(url, folder_id, title, options)
+
+    def _subscribe(self, url, folder_id, title, options):
+        """Write a validated subscription and job in the caller's transaction.
+
+        The worker creates reader's cache on first refresh; import is one app-DB
+        transaction and never commits a half-imported library or reader cache.
+        """
         self.one("SELECT id FROM folders WHERE id=?", (folder_id,))
         existing = self.rows("SELECT id FROM feeds WHERE url=?", (url,))
         id = existing[0]["id"] if existing else uid()
-        options = self.validate_options(options or {})
-        with self.reader() as reader:
-            reader.add_feed(url, exist_ok=True)
-        with self.db:
-            self.db.execute(
-                """INSERT INTO feeds(id,url,title,folder_id,options,created)
+        self.db.execute(
+            """INSERT INTO feeds(id,url,title,folder_id,options,created)
               VALUES(?,?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET deleted=0,folder_id=excluded.folder_id""",
-                (
-                    id,
-                    url,
-                    title.strip() or urlsplit(url).hostname,
-                    folder_id,
-                    json.dumps(options | {"custom_title": bool(title.strip())}),
-                    now(),
-                ),
-            )
-        self.enqueue("refresh", {"feed_id": id})
+            (
+                id,
+                url,
+                title.strip() or urlsplit(url).hostname,
+                folder_id,
+                json.dumps(options | {"custom_title": bool(title.strip())}),
+                now(),
+            ),
+        )
+        self._enqueue("refresh", {"feed_id": id})
         return {"id": id}
 
     def validate_options(self, options):
@@ -329,6 +369,8 @@ class Core:
         if title is not None:
             opts["custom_title"] = bool(title.strip())
         self.validate_options(opts)
+        interval = self.refresh_interval(id, opts)
+        reschedule = opts.get("interval") != f["options"].get("interval")
         with self.db:
             self.db.execute(
                 "UPDATE feeds SET title=?,folder_id=?,options=?,tags=? WHERE id=?",
@@ -340,6 +382,11 @@ class Core:
                     id,
                 ),
             )
+            if reschedule:
+                self.db.execute(
+                    "UPDATE feeds SET interval=?,next_check=? WHERE id=?",
+                    (interval, (datetime.now(timezone.utc) + timedelta(minutes=interval)).isoformat(), id),
+                )
         return {"ok": True}
 
     def bulk_feeds(self, ids, action, folder_id=None, tags=None):
@@ -382,7 +429,7 @@ class Core:
         if view == "starred":
             where.append("a.starred=1")
         if view == "history":
-            where.append("a.read_at IS NOT NULL")
+            where.append("EXISTS(SELECT 1 FROM events e WHERE e.article_id=a.id AND e.kind='open')")
         if tag:
             where.append("EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value=?)")
             args.append(tag)
@@ -413,9 +460,16 @@ class Core:
             view=view, feed_id=feed_id, folder_id=folder_id, unread=unread, q=q, tag=tag
         )
         if deduplicate and view != "starred":
-            where += " AND a.duplicate=0"
+            # A suppressed story must have an earlier surviving match. Evaluate
+            # visibility at read time so delete, purge, undo and old backups all
+            # work without rewriting user state or maintaining duplicate flags.
+            where += """ AND (a.duplicate=0 OR NOT EXISTS(
+                SELECT 1 FROM articles b JOIN feeds bf ON bf.id=b.feed_id
+                WHERE b.deleted=0 AND bf.deleted=0 AND b.feed_id!=a.feed_id
+                AND (b.added<a.added OR (b.added=a.added AND b.id<a.id))
+                AND title_similarity(a.title,b.title)>=94))"""
         order = (
-            "a.read_at DESC"
+            "(SELECT max(e.created) FROM events e WHERE e.article_id=a.id AND e.kind='open') DESC"
             if view == "history"
             else "a.published " + ("ASC" if sort == "oldest" else "DESC")
         )
@@ -442,7 +496,7 @@ class Core:
         a["reading_minutes"] = max(1, math.ceil(a["words"] / 230))
         a["embed"] = embed_url(a["url"], self.settings()["invidious"])
         a["downloads"] = self.rows(
-            "SELECT id,status,error FROM jobs WHERE kind='download' AND json_extract(payload,'$.article_id')=? ORDER BY created DESC",
+            "SELECT id,status,error,json_extract(payload,'$.url') url FROM jobs WHERE kind='download' AND json_extract(payload,'$.article_id')=? ORDER BY created DESC",
             (id,),
         )
         a.pop("options")
@@ -688,21 +742,36 @@ class Core:
         if kind not in ("refresh", "extract", "download", "backfill", "purge", "rules"):
             raise ValueError("Unknown job type.")
         payload = payload or {}
-        encoded = json.dumps(payload, sort_keys=True)
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            pending = self.rows(
-                "SELECT id FROM jobs WHERE kind=? AND payload=? AND status IN ('queued','running')",
-                (kind, encoded),
-            )
-            if pending:
-                return pending[0]
-            id = uid()
-            self.db.execute(
-                "INSERT INTO jobs(id,kind,payload,created,updated) VALUES(?,?,?,?,?)",
-                (id, kind, encoded, now(), now()),
-            )
+            return self._enqueue(kind, payload)
+
+    def _enqueue(self, kind, payload):
+        encoded = json.dumps(payload, sort_keys=True)
+        pending = self.rows(
+            "SELECT id FROM jobs WHERE kind=? AND payload=? AND status IN ('queued','running')",
+            (kind, encoded),
+        )
+        if pending:
+            return pending[0]
+        id = uid()
+        self.db.execute(
+            "INSERT INTO jobs(id,kind,payload,created,updated) VALUES(?,?,?,?,?)",
+            (id, kind, encoded, now(), now()),
+        )
         return {"id": id}
+
+    def refresh_interval(self, feed_id, options):
+        dates = [
+            datetime.fromisoformat(a["published"])
+            for a in self.rows(
+                "SELECT published FROM articles WHERE feed_id=? ORDER BY published DESC LIMIT 25", (feed_id,)
+            )
+        ]
+        gaps = [(a - b).total_seconds() / 60 for a, b in zip(dates, dates[1:]) if a > b]
+        return int(
+            options.get("interval") or (max(15, min(1440, statistics.median(gaps) / 2)) if gaps else 60)
+        )
 
     def refresh(self, feed_id):
         f = self.one("SELECT * FROM feeds WHERE id=? AND deleted=0", (feed_id,))
@@ -796,10 +865,7 @@ class Core:
                     (feed_id,),
                 )
             ]
-            gaps = [(a - b).total_seconds() / 60 for a, b in zip(dates, dates[1:]) if a > b]
-            interval = int(
-                options.get("interval") or (max(15, min(1440, statistics.median(gaps) / 2)) if gaps else 60)
-            )
+            interval = self.refresh_interval(feed_id, options)
             with self.db:
                 self.db.execute(
                     "UPDATE feeds SET checked=?,next_check=?,last_article=?,interval=?,error=NULL,failures=0 WHERE id=?",
@@ -1072,6 +1138,13 @@ class Core:
             raise ValueError("Expected an OPML document.")
         count = 0
 
+        # Validate every URL before opening the write transaction (DNS can be
+        # slow). Folder/name/depth errors below still roll back the whole import.
+        for child in root.iter():
+            for key, value in child.attrib.items():
+                if key.lower() == "xmlurl":
+                    safe_url(value)
+
         def walk(node, folder="inbox", depth=0):
             nonlocal count
             if depth > 50:
@@ -1082,17 +1155,25 @@ class Core:
                 target = folder
                 if child.tag.lower() == "outline":
                     if attrs.get("xmlurl"):
-                        self.subscribe(attrs["xmlurl"], folder, name)
+                        self._subscribe(attrs["xmlurl"], folder, name, {})
                         count += 1
                     else:
                         parent = None if folder == "inbox" else folder
                         matches = self.rows(
                             "SELECT id FROM folders WHERE name=? AND parent_id IS ?", (name, parent)
                         )
-                        target = matches[0]["id"] if matches else self.save_folder(name, parent)["id"]
+                        if not name.strip():
+                            raise ValueError("A folder needs a name.")
+                        target = matches[0]["id"] if matches else uid()
+                        if not matches:
+                            self.db.execute(
+                                "INSERT INTO folders VALUES (?,?,?)", (target, name.strip(), parent)
+                            )
                 walk(child, target, depth + 1)
 
-        walk(root)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            walk(root)
         return {"imported": count}
 
     def export_opml(self):

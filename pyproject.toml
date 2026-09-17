@@ -12,7 +12,7 @@ dependencies = [
   "sgmllib3k==1.0.0",
   "httpx>=0.28,<1", "beautifulsoup4>=4.13,<5", "trafilatura>=2,<3",
   "nh3>=0.2,<1", "defusedxml>=0.7,<1", "markdownify>=1,<2",
-  "rapidfuzz>=3,<4", "regex>=2024.11", "mcp>=1.12,<2",
+  "rapidfuzz>=3,<4", "regex>=2024.11", "tinycss2>=1.4,<2", "mcp>=1.12,<2",
   "supervisor>=4.2,<5"
 ]
 

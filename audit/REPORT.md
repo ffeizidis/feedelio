@@ -1,8 +1,30 @@
 # Feedelio adversarial browser audit
 
-Date: 17 September 2026 (Europe/Athens). Application under test: commit `47f1e19` on `main`.
+Date: 17 September 2026 (Europe/Athens). Original application under test: commit `47f1e19` on `main`.
 
-## Verdict
+## Fix verification
+
+All ten reproduced findings below have been repaired. Final browser verification: **38 passed, 0 failed, 0 skipped** in 142.23 seconds—the original 36 scenarios plus two additional navigation boundary cases. The expanded backend regression suite passes **49 tests** (the original 24 plus 25 new cases) in 19.70 seconds, with four dependency/parser warnings. See the committed [fix verification snapshot](fix-results.json).
+
+Frontend build, Ruff and whitespace checks pass. Docker image `feedelio:audit-fixes` (`e72055309cad`) built successfully; an automatically removed, network-isolated container with memory-only data passed frontend, API, independent worker-heartbeat and CSP smoke checks. The existing container and user data were not replaced or modified; these fixes are not yet deployed there.
+
+| Findings | Repair |
+| --- | --- |
+| B1–B2 | Keyboard navigation follows the visible, folder-grouped order, skips collapsed groups, and retains a reading trail when opened articles disappear from unread-only. Preference-response timing no longer clears that trail. |
+| B3 | Direct-feed discovery validates content with the existing reader parsers; feed-less HTML is rejected, including HTML served with misleading feed MIME types. |
+| B4 | `tinycss2` parses inline image styles, removing tiny/hidden images including escaped CSS identifiers, comments, fractional pixels and `!important`. Normal images remain available after opt-in. |
+| B5 | Suppression requires an earlier surviving cross-feed match; deleting an original feed/article exposes a remaining copy, and undo restores suppression. |
+| B6 | OPML prevalidates URLs and imports folders, subscriptions and jobs in one transaction. Late URL, folder-name and depth errors leave the existing library unchanged. The worker creates reader's cache on first refresh. |
+| B7 | Editing the interval immediately recalculates the next check, including switching back to automatic calculation. Renaming does not change the schedule. |
+| B8 | Offline download metadata includes its source enclosure URL; each audio player selects the matching download. |
+| B9 | History uses actual open events and orders by the most recent open. Bulk/manual marking read does not invent reading history. |
+| B10 | CSP permits HTTPS frames plus only the exact configured local HTTP Invidious origin. Changing the instance refreshes the document after closing settings, preserving the selected article and stream. No blanket HTTP frame permission was added. |
+
+The browser assertions were not relaxed. One harness synchronization fix waits for the subscription dialog to finish closing before opening management: API polling can observe a committed subscription before the browser finishes its success handler.
+
+The original [failing result snapshot](results.json), findings and 52-feature matrix below are retained as a **historical baseline**, not current failure status. External-service, scale and deployment limitations remain; fixing these ten defects does not establish untested production integrations.
+
+## Original audit verdict (before fixes)
 
 **Not ready to call feature-complete.** The original regression suite passes, but adversarial browser testing reproduces defects in keyboard navigation, duplicate visibility, import behavior, tracking protection, scheduling, audio selection, reading history and local video embedding. Application code has deliberately not been changed during this audit.
 
@@ -18,7 +40,7 @@ Passing a scenario establishes the behavior tested, not every possible behavior 
 - MCP is tested through its real stdio transport, with changes verified in the browser.
 - The real unpacked extension runs in a fresh persistent Chromium profile using the actual `chrome.readingList` API. Only default server addresses in a temporary copy are changed to the isolated test port, preventing installation-time sync with the user's running library. No Chrome APIs or application endpoints are mocked.
 - The existing Docker instance and `feedelio-data` volume are not used by these tests. The container remained healthy. No AWS resources or external accounts were changed.
-- No failures are marked `xfail`, skipped, or repaired in the application to make the audit green. Tests remain separate from the original default `tests/` suite.
+- The original audit did not change application code. Neither baseline nor fix verification marks failures `xfail` or skips them. Browser tests remain separate from the default `tests/` suite.
 
 ## Reproduce
 
@@ -32,7 +54,7 @@ uv run playwright install chromium
 uv run pytest audit -q
 ```
 
-The audit intentionally exits nonzero while the defects below remain. Run serially: scenarios write a shared result summary and temporarily opt into local-network fixture fetching. Do not point the audit at a real library. Use `uv run pytest tests -q` for the original regression suite.
+The audit now expects every scenario to pass. Run serially: scenarios write a shared result summary and temporarily opt into local-network fixture fetching. Do not point the audit at a real library. Use `uv run pytest tests -q` for the expanded regression suite.
 
 Evidence is generated in ignored `test-results/adversarial/`: `results.json`, `environment.json`, and a directory per scenario containing `trace.zip`, `final.png`, `accessibility.txt`, `server.log`, `publisher-requests.json`, uncaught page errors and browser-console messages. The real-extension trace and options screenshot are also saved at the artifact root. These artifacts are local, not committed; rerunning a scenario replaces its evidence. Inspect a trace with:
 
@@ -40,7 +62,7 @@ Evidence is generated in ignored `test-results/adversarial/`: `results.json`, `e
 uv run playwright show-trace test-results/adversarial/test_keyboard_follows_visible_folder_group_order/trace.zip
 ```
 
-## Reproduced findings
+## Original reproduced findings (all repaired)
 
 Priority is triage guidance: P1 blocks a central requirement or privacy expectation; P2 is a functional defect; P3 needs a product-semantics decision. Test names below are executable with `pytest audit -k NAME`.
 
@@ -57,7 +79,7 @@ Priority is triage guidance: P1 blocks a central requirement or privacy expectat
 | B9 | P3 | Mark an unopened stream read, then open History. All those never-opened articles appear in “Recently read.” `test_bulk_mark_read_does_not_claim_unopened_articles_as_reading_history` | Bulk state updates populate `read_at`; History uses that field rather than open events. This conflicts with an actual-reading-history interpretation; decide whether History should mean opened or merely marked read. |
 | B10 | P2 | Save a local `http://` Invidious instance, open a video and press Play. The iframe URL changes but its content never loads. `test_configured_local_invidious_is_actually_loaded` | The UI accepts HTTP, while the API's CSP allows only `frame-src https:`. HTTPS instance wiring is separate from this local-HTTP failure. Do not broadly weaken CSP to fix it. |
 
-## Coverage of all 52 requested features
+## Original coverage of all 52 requested features
 
 “Pass” refers to the specified fixture-backed check. “Defect” includes a successful normal path and a failing adversarial case. “Partial” explicitly identifies behavior not established in this audit.
 
@@ -120,4 +142,4 @@ Additional privacy checks passed: wrong-token login rejection, correct login, HT
 
 ## Remaining release checks
 
-Fix and rerun B1–B8 and B10 before treating this as a dependable daily-reader replacement; resolve B9's intended semantics. Then verify a real Inoreader export, production YouTube/Invidious/RSSHub/transcript sources, large-library and large-backup behavior, browser restarts and permission prompts, plus deployment/TLS/persistence on the intended AWS host. Do not infer these from fixture-backed passes.
+B1–B10 are repaired; History now explicitly means actual opens. Still verify a real Inoreader export, production YouTube/Invidious/RSSHub/transcript sources, large-library and large-backup behavior, browser restarts and permission prompts, plus deployment/TLS/persistence on the intended AWS host. Do not infer these from fixture-backed passes.

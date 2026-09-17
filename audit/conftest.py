@@ -115,6 +115,9 @@ class Lab:
         expect(self.page.locator(".brand")).to_be_visible()
 
     def manager(self, tab):
+        # A persisted subscription can be visible to API polling before its
+        # success handler finishes closing the add dialog and refreshing queries.
+        expect(self.page.locator("dialog:not(:has(.dialog-tabs))")).to_have_count(0)
         if not self.page.locator("dialog").count():
             self.page.get_by_role("button", name="Manage library", exact=True).click()
         self.page.locator(".dialog-tabs").get_by_role("button", name=tab, exact=True).click()

@@ -45,5 +45,7 @@ CREATE TABLE IF NOT EXISTS undo (id TEXT PRIMARY KEY, label TEXT NOT NULL, snaps
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, article_id TEXT NOT NULL, feed_id TEXT NOT NULL,
  kind TEXT NOT NULL, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS events_article_kind_created ON events(article_id,kind,created);
+CREATE INDEX IF NOT EXISTS articles_added ON articles(added);
 CREATE TABLE IF NOT EXISTS tombstones (feed_id TEXT NOT NULL, guid TEXT NOT NULL, PRIMARY KEY(feed_id,guid));
 CREATE TABLE IF NOT EXISTS chrome_state (url TEXT PRIMARY KEY, chrome_updated INTEGER NOT NULL);

@@ -151,7 +151,9 @@ Backups contain your feed cookie/proxy settings as well as reading data. Keep ex
 
 ## Verification
 
-The [adversarial browser audit](audit/REPORT.md) documents known defects and a 52-feature coverage matrix. Its separate `uv run pytest audit -q` suite intentionally fails until those defects are addressed; the original regression suite below is not a feature-completeness certificate.
+The [adversarial browser audit](audit/REPORT.md) records the ten reproduced defects, their verified fixes, and a 52-feature coverage matrix with explicit limitations. Run its separate real-browser suite with `uv run pytest audit -q`; all scenarios are expected to pass. Passing fixture-backed checks is not a feature-completeness certificate.
+
+History records actual article opens, not bulk/manual mark-as-read actions. For local HTTP Invidious, configure a private IP address or `localhost` (and enable private-network access); CSP permits only that exact origin. Changing the instance reloads the page after closing settings, preserving the selected article. Public instances require HTTPS, and an HTTPS deployment may still block HTTP frames as mixed content.
 
 ```sh
 uv sync --extra dev

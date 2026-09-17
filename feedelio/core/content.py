@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 import httpx
 import nh3
 import regex
+import tinycss2
 import trafilatura
 from bs4 import BeautifulSoup
 
@@ -38,6 +39,22 @@ def clean_url(url: str) -> str:
         if not k.lower().startswith("utm_") and k.lower() not in {"fbclid", "gclid", "mc_cid", "mc_eid"}
     ]
     return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def local_frame_origin(url: str) -> str:
+    """Return only an exact, CSP-safe local HTTP origin, never a wildcard."""
+    parts = urlsplit(url)
+    if parts.scheme != "http":
+        return ""
+    host = parts.hostname or ""
+    try:
+        local = ipaddress.ip_address(host).is_private
+    except ValueError:
+        local = host == "localhost"
+    if not local or parts.username or parts.password:
+        raise ValueError("Use HTTPS for Invidious, or a local HTTP IP address/localhost.")
+    host = f"[{host}]" if ":" in host else host
+    return f"http://{host}" + (f":{parts.port}" if parts.port else "")
 
 
 def fetch(url: str, options=None, max_bytes=8_000_000):
@@ -70,11 +87,32 @@ def sanitize(body: str, base: str) -> str:
     for tag in soup.select("script,style,iframe,object,embed,form,input,button,link,meta,svg"):
         tag.decompose()
     for img in soup.select("img"):
+        styles = {}
+        for declaration in tinycss2.parse_blocks_contents(
+            img.get("style", ""), skip_comments=True, skip_whitespace=True
+        ):
+            if declaration.type == "declaration":
+                styles[declaration.lower_name] = [
+                    v for v in declaration.value if v.type not in ("whitespace", "comment")
+                ]
         tiny = any(
             str(img.get(k, "")).removesuffix("px").isdigit() and int(str(img.get(k)).removesuffix("px")) <= 2
             for k in ("width", "height")
         )
-        if tiny or regex.search(r"display\s*:\s*none|visibility\s*:\s*hidden", img.get("style", ""), regex.I):
+        for key in ("width", "height", "max-width", "max-height"):
+            values = styles.get(key, [])
+            if len(values) == 1:
+                value = values[0]
+                tiny |= (
+                    value.type == "dimension" and value.lower_unit == "px" and 0 <= value.value <= 2
+                ) or (value.type == "number" and value.value == 0)
+        hidden = any(
+            len(styles.get(key, [])) == 1
+            and styles[key][0].type == "ident"
+            and styles[key][0].value.lower() == value
+            for key, value in (("display", "none"), ("visibility", "hidden"))
+        )
+        if tiny or hidden:
             img.decompose()
             continue
         img.attrs.pop("srcset", None)

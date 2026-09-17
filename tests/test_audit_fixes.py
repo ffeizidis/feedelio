@@ -129,7 +129,7 @@ def test_download_metadata_identifies_each_enclosure(core, site):
 
 
 def test_csp_only_adds_the_configured_local_http_origin(core):
-    with TestClient(app, base_url="http://localhost") as client:
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as client:
         assert "frame-src https:;" in client.get("/").headers["Content-Security-Policy"]
         core.save_settings({"invidious": "http://127.0.0.1:9876/player"})
         policy = client.get("/").headers["Content-Security-Policy"]

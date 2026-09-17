@@ -11,6 +11,7 @@ dependencies = [
   "reader==3.26", "fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1",
   "sgmllib3k==1.0.0",
   "httpx>=0.28,<1", "beautifulsoup4>=4.13,<5", "trafilatura>=2,<3",
+  "httpcore==1.0.9", "urllib3==2.8.0", "requests>=2.32,<3",
   "nh3>=0.2,<1", "defusedxml>=0.7,<1", "markdownify>=1,<2",
   "rapidfuzz>=3,<4", "regex>=2024.11", "tinycss2>=1.4,<2", "mcp>=1.12,<2",
   "supervisor>=4.2,<5"

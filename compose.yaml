@@ -6,7 +6,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     environment:
-      FEEDELIO_TOKEN: ${FEEDELIO_TOKEN:-}
+      FEEDELIO_TOKEN: ${FEEDELIO_TOKEN:?Set a strong FEEDELIO_TOKEN before starting Docker}
       FEEDELIO_ALLOW_PRIVATE_NETWORK: ${FEEDELIO_ALLOW_PRIVATE_NETWORK:-0}
     volumes:
       - feedelio-data:/data

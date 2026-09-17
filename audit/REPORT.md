@@ -1,5 +1,7 @@
 # Feedelio adversarial browser audit
 
+Subsequent work: the [independent whole-codebase review](REVIEW.md) found and addressed fourteen further issues. Its latest verification is 84 regression tests and 43 real-browser scenarios passing. The results below remain the earlier audit's historical record.
+
 Date: 17 September 2026 (Europe/Athens). Original application under test: commit `47f1e19` on `main`.
 
 ## Fix verification

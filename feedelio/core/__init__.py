@@ -29,7 +29,6 @@ from rapidfuzz.fuzz import ratio
 from reader import make_reader
 from reader._parser.jsonfeed import JSONFeedParser
 from reader.discover import from_http_response
-from requests.adapters import HTTPAdapter
 
 from .content import (
     clean_url,
@@ -38,11 +37,14 @@ from .content import (
     fetch,
     fingerprint,
     local_frame_origin,
+    origin,
     plain,
+    request_options,
     safe_url,
     sanitize,
     text_html,
 )
+from .network import PinnedAdapter, http_client
 from .reader_extensions import BoundedParser, ExtendedFeedparser
 
 
@@ -79,9 +81,15 @@ def record(row):
     return result
 
 
-class GuardAdapter(HTTPAdapter):
+class GuardAdapter(PinnedAdapter):
+    def __init__(self, cookie_origin=None):
+        self.cookie_origin = cookie_origin
+        super().__init__()
+
     def send(self, request, **kwargs):
         safe_url(request.url)  # Requests also calls this adapter for every redirect.
+        if self.cookie_origin and origin(request.url) != origin(self.cookie_origin):
+            request.headers.pop("Cookie", None)
         if not kwargs.get("timeout"):
             kwargs["timeout"] = (5, 30)
         return super().send(request, **kwargs)
@@ -124,10 +132,11 @@ class Core:
             @reader._parser.lazy_init
             def configure(parser):
                 http = parser.get_retriever("http://")
+                http.session.trust_env = False
                 for mime, parsers in parser.parsers_by_mime_type.items():
                     parser.parsers_by_mime_type[mime] = [(q, BoundedParser(p)) for q, p in parsers]
-                http.session.mount("http://", GuardAdapter())
-                http.session.mount("https://", GuardAdapter())
+                http.session.mount("http://", GuardAdapter(options.get("cookie_origin")))
+                http.session.mount("https://", GuardAdapter(options.get("cookie_origin")))
                 http.session.headers["User-Agent"] = options.get("user_agent") or "Feedelio/0.1"
                 if options.get("cookie"):
                     http.session.headers["Cookie"] = options["cookie"]
@@ -197,7 +206,7 @@ class Core:
             r["id"]
             for r in self.rows(
                 """WITH RECURSIVE tree(id) AS (
-          SELECT id FROM folders WHERE id=? UNION ALL SELECT f.id FROM folders f JOIN tree t ON f.parent_id=t.id)
+          SELECT id FROM folders WHERE id=? UNION SELECT f.id FROM folders f JOIN tree t ON f.parent_id=t.id)
           SELECT id FROM tree""",
                 (folder_id,),
             )
@@ -208,12 +217,13 @@ class Core:
             raise ValueError("A folder needs a name.")
         if id == "inbox":
             raise ValueError("Unfiled is the permanent default folder.")
-        if parent_id:
-            self.one("SELECT id FROM folders WHERE id=?", (parent_id,))
-        if id and parent_id in self.descendants(id):
-            raise ValueError("A folder cannot contain itself or its ancestors.")
-        id = id or uid()
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if parent_id:
+                self.one("SELECT id FROM folders WHERE id=?", (parent_id,))
+            if id and parent_id in self.descendants(id):
+                raise ValueError("A folder cannot contain itself or its ancestors.")
+            id = id or uid()
             self.db.execute(
                 "INSERT INTO folders VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,parent_id=excluded.parent_id",
                 (id, name.strip(), parent_id),
@@ -223,8 +233,9 @@ class Core:
     def delete_folder(self, id):
         if id == "inbox":
             raise ValueError("Unfiled cannot be deleted.")
-        folder = self.one("SELECT * FROM folders WHERE id=?", (id,))
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            folder = self.one("SELECT * FROM folders WHERE id=?", (id,))
             self.db.execute("UPDATE feeds SET folder_id=? WHERE folder_id=?", ("inbox", id))
             self.db.execute("UPDATE folders SET parent_id=? WHERE parent_id=?", (folder["parent_id"], id))
             self.db.execute("DELETE FROM folders WHERE id=?", (id,))
@@ -543,25 +554,19 @@ class Core:
                     )
         return {"ok": True, "undo": undo}
 
-    def mark_all(self, feed_id=None, folder_id=None):
-        where, args = self._where(feed_id=feed_id, folder_id=folder_id, unread=True)
-        ids = [
-            a["id"]
-            for a in self.rows(
-                f"SELECT a.id FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where}", args
-            )
-        ]
+    def mark_all(self, feed_id=None, folder_id=None, view="all", q="", tag=None):
+        where, args = self._where(feed_id=feed_id, folder_id=folder_id, view=view, q=q, tag=tag, unread=True)
         # One snapshot, one transaction, regardless of stream size.
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            articles = self.rows(
+                f"SELECT a.id,a.read,a.read_at FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where}",
+                args,
+            )
+            ids = [a["id"] for a in articles]
             undo = self._undo(
                 "Mark stream as read",
-                [
-                    ("articles", a["id"], {"read": a["read"], "read_at": a["read_at"]})
-                    for a in self.rows(
-                        f"SELECT a.id,a.read,a.read_at FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where}",
-                        args,
-                    )
-                ],
+                [("articles", a["id"], {"read": a["read"], "read_at": a["read_at"]}) for a in articles],
             )
             self.db.executemany(
                 "UPDATE articles SET read=1,read_at=?,state_changed=? WHERE id=?",
@@ -613,7 +618,9 @@ class Core:
         id = id or uid()
         with self.db:
             self.db.execute(
-                "INSERT OR REPLACE INTO rules VALUES (?,?,?,?,?,?,?,?)",
+                """INSERT INTO rules VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,field=excluded.field,pattern=excluded.pattern,action=excluded.action,
+                value=excluded.value,feed_id=excluded.feed_id,enabled=excluded.enabled""",
                 (id, name, field, pattern, action, value, feed_id, int(enabled)),
             )
         return {"id": id}
@@ -641,7 +648,14 @@ class Core:
         a["words"] = len(a["text"].split()) + len(a.get("transcript", "").split())
         return a
 
-    def ingest(
+    def ingest(self, *args, **kwargs):
+        # Serialize lookup + content/rule updates with interactive state edits.
+        # No network requests happen while this short write transaction is held.
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            return self._ingest(*args, **kwargs)
+
+    def _ingest(
         self,
         feed_id,
         guid,
@@ -666,34 +680,46 @@ class Core:
         )
         if existing:
             a = existing[0]
+            previous = a.copy()
             if transcript and not a["transcript"]:
-                with self.db:
-                    self.db.execute(
-                        "UPDATE articles SET transcript=?,words=words+? WHERE id=?",
-                        (transcript, len(transcript.split()), a["id"]),
-                    )
+                a["transcript"] = transcript
+                a["words"] += len(transcript.split())
+            if enclosures is not None:
+                a["enclosures"] = enclosures
+            if a["guid"] == guid:
+                a.update(
+                    title=title or a["title"],
+                    author=author or a["author"],
+                    published=published or a["published"],
+                )
+                if not a["extracted"]:
+                    a["url"] = url or a["url"]
             if a["guid"] == guid and a["fingerprint"] != digest:
                 a.update(title=title or a["title"], author=author or a["author"], fingerprint=digest)
                 if not a["extracted"]:
                     a["body"] = body
                 a = self.apply_rules(a)
-                with self.db:
-                    self.db.execute(
-                        "UPDATE articles SET title=?,author=?,body=?,text=?,words=?,fingerprint=?,tags=?,read=?,starred=?,deleted=? WHERE id=?",
-                        (
-                            a["title"],
-                            a["author"],
-                            a["body"],
-                            a["text"],
-                            a["words"],
-                            digest,
-                            json.dumps(a["tags"]),
-                            a["read"],
-                            a["starred"],
-                            a["deleted"],
-                            a["id"],
-                        ),
-                    )
+            if a != previous:
+                self.db.execute(
+                    "UPDATE articles SET title=?,author=?,body=?,text=?,words=?,fingerprint=?,tags=?,read=?,starred=?,deleted=?,url=?,published=?,enclosures=?,transcript=? WHERE id=?",
+                    (
+                        a["title"],
+                        a["author"],
+                        a["body"],
+                        a["text"],
+                        a["words"],
+                        a["fingerprint"],
+                        json.dumps(a["tags"]),
+                        a["read"],
+                        a["starred"],
+                        a["deleted"],
+                        a["url"],
+                        a["published"],
+                        json.dumps(a["enclosures"]),
+                        a["transcript"],
+                        a["id"],
+                    ),
+                )
             return a["id"]
         a = dict(
             id=uid(),
@@ -731,11 +757,10 @@ class Core:
                 )
             )
         a = self.apply_rules(a)
-        with self.db:
-            self.db.execute(
-                "INSERT INTO articles (" + ",".join(a) + ") VALUES (" + ",".join("?" for _ in a) + ")",
-                [json.dumps(v) if k in JSON_FIELDS else v for k, v in a.items()],
-            )
+        self.db.execute(
+            "INSERT INTO articles (" + ",".join(a) + ") VALUES (" + ",".join("?" for _ in a) + ")",
+            [json.dumps(v) if k in JSON_FIELDS else v for k, v in a.items()],
+        )
         return a["id"]
 
     def enqueue(self, kind, payload=None):
@@ -778,7 +803,7 @@ class Core:
         if not f["url"].startswith("http"):
             return {"new": 0}
         try:
-            options = f["options"]
+            options = request_options(f)
             if options.get("scrape_selector"):
                 new = self.scrape(f)
             else:
@@ -846,9 +871,9 @@ class Core:
                                 self.enqueue("extract", {"article_id": id})
                     with self.db:
                         self.db.execute(
-                            "UPDATE feeds SET title=?,site_url=? WHERE id=?",
+                            "UPDATE feeds SET title=CASE WHEN json_extract(options,'$.custom_title') THEN title ELSE ? END,site_url=? WHERE id=?",
                             (
-                                f["title"] if options.get("custom_title") else rf.title or f["title"],
+                                rf.title or f["title"],
                                 rf.link or "",
                                 feed_id,
                             ),
@@ -857,6 +882,11 @@ class Core:
                         safe_url(moved[-1])
                         reader.change_feed_url(f["url"], moved[-1])
                         with self.db:
+                            if origin(f["url"]) != origin(moved[-1]):
+                                self.db.execute(
+                                    "UPDATE feeds SET options=json_remove(options,'$.cookie') WHERE id=?",
+                                    (feed_id,),
+                                )
                             self.db.execute("UPDATE feeds SET url=? WHERE id=?", (moved[-1], feed_id))
             dates = [
                 datetime.fromisoformat(a["published"])
@@ -865,8 +895,10 @@ class Core:
                     (feed_id,),
                 )
             ]
-            interval = self.refresh_interval(feed_id, options)
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                current = self.one("SELECT options FROM feeds WHERE id=?", (feed_id,))
+                interval = self.refresh_interval(feed_id, current["options"])
                 self.db.execute(
                     "UPDATE feeds SET checked=?,next_check=?,last_article=?,interval=?,error=NULL,failures=0 WHERE id=?",
                     (
@@ -895,7 +927,7 @@ class Core:
             raise
 
     def scrape(self, feed):
-        data, url, _ = fetch(feed["url"], feed["options"])
+        data, url, _ = fetch(feed["url"], request_options(feed))
         soup = BeautifulSoup(data, "html.parser")
         items = soup.select(feed["options"]["scrape_selector"])
         if not items:
@@ -922,12 +954,18 @@ class Core:
         if not a["source_url"]:
             raise ValueError("This article has no source page URL to extract.")
         f = self.one("SELECT * FROM feeds WHERE id=?", (a["feed_id"],))
-        result = extract(a["url"], f["options"])
-        a.update(body=result["body"], url=result["url"], transcript=result["transcript"] or a["transcript"])
-        if result["paywall"]:
-            a["tags"] = sorted(set(a["tags"] + ["paywall"]))
-        a = self.apply_rules(a)
+        result = extract(a["url"], request_options(f))
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            # Fetching can take seconds: merge content into current user state,
+            # never the snapshot from before the request.
+            a = self.one("SELECT * FROM articles WHERE id=?", (article_id,))
+            a.update(
+                body=result["body"], url=result["url"], transcript=result["transcript"] or a["transcript"]
+            )
+            if result["paywall"]:
+                a["tags"] = sorted(set(a["tags"] + ["paywall"]))
+            a = self.apply_rules(a)
             self.db.execute(
                 "UPDATE articles SET extracted=1,body=?,text=?,url=?,transcript=?,tags=?,words=?,read=?,starred=?,deleted=? WHERE id=?",
                 (
@@ -951,12 +989,11 @@ class Core:
             raise ValueError("Only audio enclosures belonging to this article can be downloaded.")
         # Bounded, streamed download. Atomic rename exposes only complete episodes.
         safe_url(url)
-        import httpx
 
         path = self.root / "downloads" / job_id
         partial = path.with_suffix(".part")
         try:
-            with httpx.Client(timeout=60, follow_redirects=False) as client:
+            with http_client(timeout=60) as client:
                 for _ in range(10):
                     safe_url(url)
                     with client.stream("GET", url) as response:
@@ -984,9 +1021,10 @@ class Core:
         return self.root / "downloads" / id
 
     def delete_download(self, id):
-        path = self.download_path(id)
-        path.unlink(missing_ok=True)
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            path = self.download_path(id)
+            path.unlink(missing_ok=True)
             self.db.execute("UPDATE jobs SET status='removed' WHERE id=?", (id,))
         return {"ok": True}
 
@@ -998,13 +1036,20 @@ class Core:
         while url and url not in visited and pages < min(100, max(1, int(max_pages))):
             safe_url(url)
             visited.add(url)
-            with self.reader(f["options"]) as reader:
+            with self.reader(request_options(f)) as reader:
                 existed = reader.get_feed(url, None) is not None
                 reader.add_feed(url, exist_ok=True)
                 try:
                     reader.update_feed(url)
                     for e in reader.get_entries(feed=url):
-                        body = next((c.value for c in e.content), e.summary or "")
+                        body = next(
+                            (
+                                text_html(c.value) if c.type == "text/plain" else c.value
+                                for c in e.content
+                                if c.type in ("text/html", "text/xhtml", "text/plain")
+                            ),
+                            e.summary or "",
+                        )
                         self.ingest(
                             feed_id,
                             e.id,
@@ -1018,7 +1063,7 @@ class Core:
                 finally:
                     if not existed:
                         reader.delete_feed(url)
-            data, final, _ = fetch(url, f["options"])
+            data, final, _ = fetch(url, request_options(f))
             try:
                 next_url = json.loads(data).get("next_url")
             except (ValueError, AttributeError):
@@ -1031,16 +1076,21 @@ class Core:
 
     def purge(self):
         count = 0
-        for f in self.feeds():
-            days = f["options"].get("retention_days", self.settings()["retention_days"])
-            if f["options"].get("archive") or not days:
-                continue
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
-            doomed = self.rows(
-                "SELECT id,guid FROM articles WHERE feed_id=? AND added<? AND starred=0 AND read=1",
-                (f["id"], cutoff),
-            )
+        for row in self.rows("SELECT id FROM feeds WHERE deleted=0"):
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                current = self.rows("SELECT * FROM feeds WHERE id=? AND deleted=0", (row["id"],))
+                if not current:
+                    continue
+                f = current[0]
+                days = f["options"].get("retention_days", self.settings()["retention_days"])
+                if f["options"].get("archive") or not days:
+                    continue
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+                doomed = self.rows(
+                    "SELECT id,guid FROM articles WHERE feed_id=? AND added<? AND starred=0 AND read=1",
+                    (f["id"], cutoff),
+                )
                 self.db.executemany(
                     "INSERT OR IGNORE INTO tombstones VALUES (?,?)", [(f["id"], a["guid"]) for a in doomed]
                 )
@@ -1048,7 +1098,13 @@ class Core:
             with self.reader() as reader:
                 # Public delete_entry only accepts manually added entries. This is
                 # the same pinned internal primitive reader's retention plugins use.
-                reader._storage.delete_entries([(f["url"], a["guid"]) for a in doomed])
+                reader._storage.delete_entries(
+                    [
+                        (f["url"], a["guid"])
+                        for a in doomed
+                        if reader.get_entry((f["url"], a["guid"]), None) is not None
+                    ]
+                )
             count += len(doomed)
         with self.db:
             self.db.execute(
@@ -1113,9 +1169,13 @@ class Core:
 
     def reapply_rules(self):
         count = 0
-        for row in self.rows("SELECT * FROM articles WHERE deleted=0"):
-            a = self.apply_rules(row)
+        for row in self.rows("SELECT id FROM articles WHERE deleted=0"):
             with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                current = self.rows("SELECT * FROM articles WHERE id=? AND deleted=0", (row["id"],))
+                if not current:
+                    continue
+                a = self.apply_rules(current[0])
                 self.db.execute(
                     "UPDATE articles SET body=?,text=?,words=?,tags=?,read=?,starred=?,deleted=? WHERE id=?",
                     (
@@ -1217,7 +1277,7 @@ class Core:
             "undo",
         ]
         with self.db:
-            self.db.execute("BEGIN")
+            self.db.execute("BEGIN IMMEDIATE")
             data = {t: [dict(r) for r in self.db.execute(f"SELECT * FROM {t}")] for t in tables}
             media = {
                 j["id"]: base64.b64encode(self.download_path(j["id"]).read_bytes()).decode("ascii")
@@ -1229,10 +1289,6 @@ class Core:
     def restore(self, backup):
         if backup.get("format") != "feedelio" or backup.get("version") != 1:
             raise ValueError("Unsupported backup format.")
-        if self.rows("SELECT id FROM feeds LIMIT 1"):
-            raise ValueError(
-                "Restore requires an empty library. Use a new data directory to preserve the current library."
-            )
         tables = [
             "folders",
             "feeds",
@@ -1262,37 +1318,40 @@ class Core:
         if set(media) != expected_media or any(not regex.fullmatch("[a-f0-9]{32}", id) for id in media):
             raise ValueError("Backup has missing or invalid downloaded episodes.")
         decoded = {id: base64.b64decode(value, validate=True) for id, value in media.items()}
-        if any((self.root / "downloads" / id).exists() for id in decoded):
-            raise ValueError("Restore requires an empty downloads directory.")
-        with self.db:
-            self.db.execute("PRAGMA defer_foreign_keys=ON")
-            for table in tables:
-                valid = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
-                for row in data[table]:
-                    if set(row) != valid:
-                        raise ValueError(f"Invalid {table} row.")
-                    self.db.execute(
-                        f"INSERT OR REPLACE INTO {table} ("
-                        + ",".join(row)
-                        + ") VALUES ("
-                        + ",".join("?" for _ in row)
-                        + ")",
-                        list(row.values()),
-                    )
-            self.db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
-            # Files are new, validated IDs. A failed write rolls back the database.
-            written = []
-            try:
+        written = []
+        try:
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                if self.rows("SELECT id FROM feeds LIMIT 1"):
+                    raise ValueError("Restore requires an empty library. Use a new data directory.")
+                if any((self.root / "downloads" / id).exists() for id in decoded):
+                    raise ValueError("Restore requires an empty downloads directory.")
+                self.db.execute("PRAGMA defer_foreign_keys=ON")
+                for table in tables:
+                    valid = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+                    for row in data[table]:
+                        if set(row) != valid:
+                            raise ValueError(f"Invalid {table} row.")
+                        self.db.execute(
+                            f"INSERT OR REPLACE INTO {table} ("
+                            + ",".join(row)
+                            + ") VALUES ("
+                            + ",".join("?" for _ in row)
+                            + ")",
+                            list(row.values()),
+                        )
+                self.db.execute("UPDATE jobs SET status='queued' WHERE status='running'")
                 for id, content in decoded.items():
                     path = self.root / "downloads" / id
                     written.append(path)
                     path.write_bytes(content)
                 if self.db.execute("PRAGMA foreign_key_check").fetchone():
                     raise ValueError("Backup contains invalid references.")
-            except Exception:
-                for path in written:
-                    path.unlink(missing_ok=True)
-                raise
+        except Exception:
+            # Includes commit failures, not just file-write errors.
+            for path in written:
+                path.unlink(missing_ok=True)
+            raise
         return {"restored": len(data["articles"])}
 
     def obsidian(self, id):

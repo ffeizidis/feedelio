@@ -301,6 +301,16 @@ function App() {
     setOffset(0);
   }, [deferredQ, settings.hide_read, settings.sort]);
   useEffect(() => {
+    if (
+      articles.data &&
+      !articles.isFetching &&
+      offset >= articles.data.total &&
+      offset > 0
+    ) {
+      setOffset(Math.max(0, Math.floor((articles.data.total - 1) / 100) * 100));
+    }
+  }, [articles.data, articles.isFetching, offset]);
+  useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 5500);
       return () => clearTimeout(timer);
@@ -604,7 +614,11 @@ function App() {
               icon={CheckCheck}
               label="Mark this stream as read"
               onClick={() =>
-                run("mark_all", scope, "Stream marked as read · U to undo")
+                run(
+                  "mark_all",
+                  { ...scope, view, q: deferredQ },
+                  "Stream marked as read · U to undo",
+                )
               }
             />
             <IconButton
@@ -744,7 +758,7 @@ function App() {
               </section>
             ))
           )}
-          {count > 100 && (
+          {(count > 100 || offset > 0) && (
             <div className="pagination">
               <button
                 disabled={!offset}

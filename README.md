@@ -5,17 +5,18 @@ A private, single-user, keyboard-first desktop RSS reader. The left pane combine
 ## Run with Docker
 
 ```sh
+export FEEDELIO_TOKEN="$(openssl rand -hex 32)"
 docker compose up --build -d
 ```
 
-Open **http://localhost:8000**. Import your Inoreader OPML under **Manage library → Data & connections**, or press **A** to add a feed. The library starts empty; no sample subscriptions are added.
+Keep that token in your password manager (or a private `.env` file for Compose). Open **http://localhost:8000** and sign in with it. Import your Inoreader OPML under **Manage library → Data & connections**, or press **A** to add a feed. The library starts empty; no sample subscriptions are added.
 
 Without the Compose plugin:
 
 ```sh
 docker build -t feedelio:local .
 docker run -d --name feedelio --restart unless-stopped \
-  -p 127.0.0.1:8000:8000 -v feedelio-data:/data feedelio:local
+  -e FEEDELIO_TOKEN -p 127.0.0.1:8000:8000 -v feedelio-data:/data feedelio:local
 ```
 
 One image runs **two independent processes**, supervised by Supervisor: Uvicorn for HTTP and `feedelio.worker` for polling, extraction, downloads, backfill, retention and rule jobs. Data lives in `/data`; keep this volume across upgrades. The worker holds an OS file lock, recovers interrupted jobs at startup and checks for work every ten seconds. Do not run multiple replicas against the same database.
@@ -53,6 +54,8 @@ The mature libraries do the specialized work: [reader](https://reader.readthedoc
 
 `reader` is pinned to 3.26 because its documented internal plugin interfaces are used for bounded feed parsing, GUID-less fallback, provided podcast transcripts and raw-entry retention. Its bundled parser also needs the explicitly pinned `sgmllib3k` dependency. Upgrade this boundary with the integration tests.
 
+Small HTTPcore/urllib3 adapters pin each direct TCP connection to validated DNS answers without changing HTTP Host, TLS SNI or certificate verification. Their connection hooks are version-pinned and covered by real TLS tests; keep those tests when upgrading. Ambient HTTP proxy environment variables are deliberately ignored. Explicit per-feed proxies require the private-network opt-in because the proxy controls destination resolution; only use a trusted proxy and enforce its egress policy separately.
+
 `reader.sqlite` is source/cache storage. `app.sqlite` is authoritative for your reading state and processed articles. Full text and transcripts are indexed transactionally via FTS5 triggers. Restoring does not require the reader cache: the next refresh recreates it without duplicating restored articles.
 
 ## Feature coverage
@@ -80,6 +83,7 @@ All requested areas have an implementation. Integrations that depend on a publis
 ### Integration boundaries
 
 - Custom UA/cookies/proxies use request settings you supply. There is no CAPTCHA-solving service, browser-based challenge solver or guarantee of passing bot protection.
+- Feed cookies are confined to the subscription's scheme/host/port. Cross-origin article/transcript/backfill requests do not receive them, and a permanent cross-origin feed migration clears the cookie. Reconfigure credentials explicitly for a new trusted origin.
 - Paywall detection uses `isAccessibleForFree: false` in source-page JSON-LD after extraction. Feed-text rules can catch other signals. Canonical resolution does not unlock subscription-only content. Enable automatic extraction on feeds where these tags should be detected automatically.
 - YouTube feed items usually link to `/watch`; Shorts filtering catches items whose URL identifies `/shorts/`. The feed does not reliably label every Short, so the preset cannot classify all short videos.
 - Captions must actually be provided and accessible. YouTube page formats and third-party Invidious/RSSHub availability can change. There is no audio-to-text generation or guaranteed transcript availability.
@@ -141,7 +145,7 @@ The single access token provides an HTTP-only, SameSite session cookie or Bearer
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `FEEDELIO_DATA` | `data` (`/data` in Docker) | Persistent library directory |
-| `FEEDELIO_TOKEN` | empty | Single-user access token; required for remote exposure |
+| `FEEDELIO_TOKEN` | empty | Single-user access token; required for Docker, proxies and non-loopback peers |
 | `FEEDELIO_STATIC` | `web/dist` | Built frontend directory |
 | `FEEDELIO_ALLOW_PRIVATE_NETWORK` | `0` | Allow private-network feeds/proxies when `1` |
 | `FEEDELIO_MAX_EPISODE_MB` | `500` | Maximum bytes per downloaded episode, in MiB |
@@ -149,9 +153,13 @@ The single access token provides an HTTP-only, SameSite session cookie or Bearer
 
 Backups contain your feed cookie/proxy settings as well as reading data. Keep exported files private. To upgrade: export a backup, rebuild the image, then recreate the container with the same volume. This first release has a versioned export format; future database schema changes require migrations.
 
+Token-free access is limited to direct loopback clients using a loopback hostname. Docker bridge peers and reverse proxies must use a token even when published on localhost; `Host: localhost` alone is not proof of a local client. Keep Uvicorn's forwarded-header trust restricted to your actual trusted proxy. Before upgrading an older token-free Docker installation, configure `FEEDELIO_TOKEN`; your volume and library remain unchanged.
+
 ## Verification
 
 The [adversarial browser audit](audit/REPORT.md) records the ten reproduced defects, their verified fixes, and a 52-feature coverage matrix with explicit limitations. Run its separate real-browser suite with `uv run pytest audit -q`; all scenarios are expected to pass. Passing fixture-backed checks is not a feature-completeness certificate.
+
+The subsequent [independent whole-codebase review](audit/REVIEW.md) records fourteen findings and their fixes, including credential isolation, DNS pinning, concurrent state preservation, transactional retention/restore and filtered-stream actions.
 
 History records actual article opens, not bulk/manual mark-as-read actions. For local HTTP Invidious, configure a private IP address or `localhost` (and enable private-network access); CSP permits only that exact origin. Changing the instance reloads the page after closing settings, preserving the selected article. Public instances require HTTPS, and an HTTPS deployment may still block HTTP frames as mixed content.
 

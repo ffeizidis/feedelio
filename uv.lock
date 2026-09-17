@@ -324,6 +324,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "defusedxml" },
     { name = "fastapi" },
+    { name = "httpcore" },
     { name = "httpx" },
     { name = "markdownify" },
     { name = "mcp" },
@@ -331,10 +332,12 @@ dependencies = [
     { name = "rapidfuzz" },
     { name = "reader" },
     { name = "regex" },
+    { name = "requests" },
     { name = "sgmllib3k" },
     { name = "supervisor" },
     { name = "tinycss2" },
     { name = "trafilatura" },
+    { name = "urllib3" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -350,6 +353,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.13,<5" },
     { name = "defusedxml", specifier = ">=0.7,<1" },
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpcore", specifier = "==1.0.9" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "markdownify", specifier = ">=1,<2" },
     { name = "mcp", specifier = ">=1.12,<2" },
@@ -359,11 +363,13 @@ requires-dist = [
     { name = "rapidfuzz", specifier = ">=3,<4" },
     { name = "reader", specifier = "==3.26" },
     { name = "regex", specifier = ">=2024.11" },
+    { name = "requests", specifier = ">=2.32,<3" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11,<1" },
     { name = "sgmllib3k", specifier = "==1.0.0" },
     { name = "supervisor", specifier = ">=4.2,<5" },
     { name = "tinycss2", specifier = ">=1.4,<2" },
     { name = "trafilatura", specifier = ">=2,<3" },
+    { name = "urllib3", specifier = "==2.8.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34,<1" },
 ]
 provides-extras = ["dev"]

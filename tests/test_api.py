@@ -4,7 +4,7 @@ from feedelio.api import app
 
 
 def test_api_state_and_exports(core, site):
-    with TestClient(app, base_url="http://localhost") as client:
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as client:
         result = client.post("/api/actions/subscribe", json={"payload": {"url": site[0] + "/rss"}})
         assert result.status_code == 200, result.text
         core.refresh(result.json()["id"])
@@ -26,7 +26,7 @@ def test_api_state_and_exports(core, site):
 
 
 def test_local_extension_and_rebinding_guard(core):
-    with TestClient(app, base_url="http://localhost") as client:
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as client:
         assert (
             client.post(
                 "/api/actions/chrome_sync",

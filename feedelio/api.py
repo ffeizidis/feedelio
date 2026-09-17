@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import ipaddress
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -35,9 +36,13 @@ async def protect(request: Request, call_next):
         or hmac.compare_digest(request.cookies.get("feedelio_session", ""), session_token(token))
     )
     local_host = request.url.hostname in ("localhost", "127.0.0.1", "::1")
-    if protected and not token and not local_host:
+    try:
+        local_peer = bool(request.client) and ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        local_peer = False
+    if protected and not token and not (local_host and local_peer):
         return JSONResponse(
-            {"detail": "Set FEEDELIO_TOKEN before accessing Feedelio through a remote hostname."},
+            {"detail": "Set FEEDELIO_TOKEN for non-loopback access, including Docker and reverse proxies."},
             status_code=403,
         )
     if protected and token and not authenticated:

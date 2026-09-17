@@ -5,7 +5,6 @@ import html
 import ipaddress
 import json
 import os
-import socket
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -15,19 +14,15 @@ import tinycss2
 import trafilatura
 from bs4 import BeautifulSoup
 
+from .network import addresses, http_client
+
 
 def safe_url(url: str) -> str:
     parts = urlsplit(url.strip())
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
         raise ValueError("Use an http(s) URL without embedded credentials.")
     if os.getenv("FEEDELIO_ALLOW_PRIVATE_NETWORK") != "1":
-        for info in socket.getaddrinfo(
-            parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
-        ):
-            if not ipaddress.ip_address(info[4][0]).is_global:
-                raise ValueError(
-                    "Private network addresses are disabled. Set FEEDELIO_ALLOW_PRIVATE_NETWORK=1 to opt in."
-                )
+        addresses(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
     return urlunsplit(parts)
 
 
@@ -39,6 +34,16 @@ def clean_url(url: str) -> str:
         if not k.lower().startswith("utm_") and k.lower() not in {"fbclid", "gclid", "mc_cid", "mc_eid"}
     ]
     return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def origin(url: str):
+    parts = urlsplit(url)
+    return parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)
+
+
+def request_options(feed):
+    """Bind user-supplied credentials to the subscription, not publisher links."""
+    return feed["options"] | {"cookie_origin": feed["url"]}
 
 
 def local_frame_origin(url: str) -> str:
@@ -60,13 +65,13 @@ def local_frame_origin(url: str) -> str:
 def fetch(url: str, options=None, max_bytes=8_000_000):
     options = options or {}
     headers = {"User-Agent": options.get("user_agent") or "Feedelio/0.1 (+private feed reader)"}
-    origin = urlsplit(url).netloc
+    credential_origin = origin(options.get("cookie_origin") or url)
     if options.get("cookie"):
         headers["Cookie"] = options["cookie"]
-    with httpx.Client(timeout=30, proxy=options.get("proxy") or None, follow_redirects=False) as client:
+    with http_client(options, timeout=30) as client:
         for _ in range(10):
             safe_url(url)
-            if urlsplit(url).netloc != origin:
+            if origin(url) != credential_origin:
                 headers.pop("Cookie", None)
             with client.stream("GET", url, headers=headers) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
@@ -149,13 +154,13 @@ def fingerprint(title, text):
 
 
 def extract(url, options=None):
-    options = options or {}
-    data, final, _ = fetch(url, options)
+    options = {"cookie_origin": url} | (options or {})
+    data, document_url, _ = fetch(url, options)
     soup = BeautifulSoup(data, "html.parser")
     canonical = soup.select_one('link[rel~="canonical"][href]')
-    final = clean_url(urljoin(final, canonical["href"])) if canonical else clean_url(final)
+    final = clean_url(urljoin(document_url, canonical["href"])) if canonical else clean_url(document_url)
     if urlsplit(final).scheme not in ("http", "https"):
-        final = clean_url(url)
+        final = clean_url(document_url)
     selector = options.get("selector")
     if selector:
         selected = soup.select(selector)
@@ -166,26 +171,11 @@ def extract(url, options=None):
         body = trafilatura.extract(
             data, output_format="html", include_links=True, include_images=True, include_tables=True
         )
-    transcript = ""
-    if options.get("transcript_selector"):
-        transcript = "\n".join(
-            node.get_text(" ", strip=True) for node in soup.select(options["transcript_selector"])
-        )
-    track = soup.select_one(
-        'track[kind="captions"][src], track[kind="subtitles"][src], a[rel="transcript"][href]'
-    )
-    if track and not transcript:
-        raw, _, _ = fetch(urljoin(final, track.get("src") or track.get("href")), options)
-        transcript = plain(raw.decode("utf-8", errors="replace"))
-    elif embed_url(url) and not transcript:
-        # Use caption tracks already supplied by the source player; never run ASR.
-        document = data.decode("utf-8", errors="replace")
-        match = regex.search(r'"captionTracks"\s*:\s*', document)
-        if match:
-            tracks, _ = json.JSONDecoder().raw_decode(document[match.end() :])
-            if tracks and tracks[0].get("baseUrl"):
-                raw, _, _ = fetch(tracks[0]["baseUrl"], options)
-                transcript = plain(raw.decode("utf-8", errors="replace"))
+    try:
+        transcript = provided_transcript(soup, data, document_url, options)
+    except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+        # Optional captions must not discard an otherwise usable article body.
+        transcript = ""
     if not body:
         if transcript:
             body = text_html(soup.title.get_text() if soup.title else "Video transcript")
@@ -198,12 +188,36 @@ def extract(url, options=None):
         except (ValueError, TypeError):
             pass
     return {
-        "body": sanitize(body, final),
+        "body": sanitize(body, document_url),
         "url": final,
         "transcript": transcript,
         "paywall": paywall,
         "title": soup.title.get_text(strip=True) if soup.title else final,
     }
+
+
+def provided_transcript(soup, data, document_url, options):
+    transcript = ""
+    if options.get("transcript_selector"):
+        transcript = "\n".join(
+            node.get_text(" ", strip=True) for node in soup.select(options["transcript_selector"])
+        )
+    track = soup.select_one(
+        'track[kind="captions"][src], track[kind="subtitles"][src], a[rel="transcript"][href]'
+    )
+    if track and not transcript:
+        raw, _, _ = fetch(urljoin(document_url, track.get("src") or track.get("href")), options)
+        transcript = plain(raw.decode("utf-8", errors="replace"))
+    elif embed_url(document_url) and not transcript:
+        # Use caption tracks already supplied by the source player; never run ASR.
+        document = data.decode("utf-8", errors="replace")
+        match = regex.search(r'"captionTracks"\s*:\s*', document)
+        if match:
+            tracks, _ = json.JSONDecoder().raw_decode(document[match.end() :])
+            if tracks and tracks[0].get("baseUrl"):
+                raw, _, _ = fetch(tracks[0]["baseUrl"], options)
+                transcript = plain(raw.decode("utf-8", errors="replace"))
+    return transcript
 
 
 def embed_url(url, invidious=""):

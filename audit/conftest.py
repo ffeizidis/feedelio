@@ -124,12 +124,14 @@ class Lab:
         # A persisted subscription can be visible to API polling before its
         # success handler finishes closing the add dialog and refreshing queries.
         expect(self.page.locator("dialog:not(:has(.dialog-tabs))")).to_have_count(0)
-        if not self.page.locator("dialog").count():
+        if not self.page.locator(".library-screen").count():
             self.page.get_by_role("button", name="Manage library", exact=True).click()
+        tab = {"Subscriptions": "Feeds", "Data & connections": "Import & export"}.get(tab, tab)
         self.page.locator(".dialog-tabs").get_by_role("button", name=tab, exact=True).click()
 
     def close(self):
-        self.page.get_by_role("button", name="Close dialog", exact=True).click()
+        label = "Close library" if self.page.locator(".library-screen").count() else "Close dialog"
+        self.page.get_by_role("button", name=label, exact=True).click()
 
     def upload(self, xml):
         self.manager("Data & connections")
@@ -175,12 +177,7 @@ class Lab:
         return feed
 
     def open_title(self, title):
-        back = self.page.get_by_role("button", name="Back to list", exact=True)
-        if back.is_visible():
-            back.click()
-        self.page.locator(".article-row").filter(
-            has=self.page.get_by_role("heading", name=title, exact=True)
-        ).click()
+        self.page.locator(".row-title").get_by_text(title, exact=True).click()
         expect(self.page.locator(".reading-content > h1")).to_have_text(title)
 
 

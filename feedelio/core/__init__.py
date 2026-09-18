@@ -59,9 +59,9 @@ def uid():
 
 
 DEFAULTS = dict(
-    theme="system",
+    theme="dark",
     font="serif",
-    font_size=19,
+    font_size=17,
     line_height=1.7,
     width=65,
     images=False,
@@ -71,8 +71,15 @@ DEFAULTS = dict(
     retention_days=90,
     invidious="",
     rsshub="https://rsshub.app",
-    sidebar_width=320,
-    list_display="preview",
+    sidebar_width=252,
+    list_width=590,
+    list_display="title",
+    accent="blue",
+    feed_colours=True,
+    unread_marker="count",
+    wordmark="script",
+    reduce_motion=False,
+    open_titles_in="reader",
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 
@@ -111,6 +118,12 @@ class Core:
         )
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
+        # Stable subscription colours, including deleted feeds so restoring or
+        # removing subscriptions never shifts the remaining palette.
+        self.db.execute("""UPDATE feeds SET options=json_set(options,'$.hue',
+          (SELECT count(*) FROM feeds older WHERE older.created<feeds.created
+            OR (older.created=feeds.created AND older.id<feeds.id)) % 14)
+          WHERE json_extract(options,'$.hue') IS NULL""")
         self.db.commit()
 
     def __enter__(self):
@@ -171,12 +184,13 @@ class Core:
         if set(values) - DEFAULTS.keys():
             raise ValueError("Unknown setting.")
         merged = self.settings() | values
-        if merged["list_display"] not in ("title", "preview"):
+        if merged["list_display"] not in ("title", "preview", "compact"):
             raise ValueError("Invalid article list display.")
         if merged["theme"] not in ("system", "light", "dark") or merged["font"] not in (
             "serif",
             "sans",
             "mono",
+            "newsreader",
         ):
             raise ValueError("Invalid theme or font.")
         for key, lo, hi in [
@@ -184,10 +198,22 @@ class Core:
             ("line_height", 1.4, 2.2),
             ("width", 45, 75),
             ("retention_days", 0, 36500),
-            ("sidebar_width", 260, 600),
+            ("sidebar_width", 180, 600),
+            ("list_width", 300, 1000),
         ]:
             if not isinstance(merged[key], (int, float)) or not lo <= merged[key] <= hi:
                 raise ValueError(f"{key} must be between {lo} and {hi}.")
+        for key, choices in {
+            "accent": ("blue", "violet", "green", "amber", "red"),
+            "unread_marker": ("count", "dot", "none"),
+            "wordmark": ("script", "plain"),
+            "open_titles_in": ("reader", "original"),
+        }.items():
+            if merged[key] not in choices:
+                raise ValueError(f"Invalid {key}.")
+        for key in ("feed_colours", "reduce_motion"):
+            if not isinstance(merged[key], bool):
+                raise ValueError(f"{key} must be a boolean.")
         if merged["invidious"]:
             safe_url(merged["invidious"])
             local_frame_origin(merged["invidious"])
@@ -250,7 +276,8 @@ class Core:
 
     def feeds(self):
         feeds = self.rows("""SELECT f.*,count(CASE WHEN a.read=0 AND a.deleted=0 THEN 1 END) unread,
-          count(CASE WHEN a.deleted=0 THEN 1 END) total FROM feeds f
+          count(CASE WHEN a.deleted=0 THEN 1 END) total,
+          count(CASE WHEN a.deleted=0 AND (EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value IN ('paywall','archive-preview'))) THEN 1 END) partial_items FROM feeds f
           LEFT JOIN articles a ON a.feed_id=f.id WHERE f.deleted=0 GROUP BY f.id ORDER BY f.title COLLATE NOCASE""")
         stale = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
         for f in feeds:
@@ -344,7 +371,13 @@ class Core:
                 url,
                 title.strip() or urlsplit(url).hostname,
                 folder_id,
-                json.dumps(options | {"custom_title": bool(title.strip())}),
+                json.dumps(
+                    options
+                    | {
+                        "custom_title": bool(title.strip()),
+                        "hue": self.one("SELECT count(*) n FROM feeds")["n"] % 14,
+                    }
+                ),
                 now(),
             ),
         )
@@ -354,6 +387,7 @@ class Core:
     def validate_options(self, options):
         allowed = {
             "custom_title",
+            "hue",
             "interval",
             "archive",
             "extract",
@@ -369,6 +403,8 @@ class Core:
         }
         if set(options) - allowed:
             raise ValueError("Unknown feed option.")
+        if "hue" in options and (type(options["hue"]) is not int or not 0 <= options["hue"] < 14):
+            raise ValueError("Invalid feed hue.")
         if options.get("interval") is not None and not 5 <= int(options["interval"]) <= 10080:
             raise ValueError("Refresh interval must be 5–10080 minutes, or null for automatic.")
         for key in ("selector", "scrape_selector", "scrape_link", "transcript_selector"):
@@ -434,7 +470,17 @@ class Core:
                 self.enqueue("refresh", {"feed_id": f["id"]})
         return {"ok": True, "undo": undo}
 
-    def _where(self, view="all", feed_id=None, folder_id=None, unread=False, q="", tag=None, **ignored):
+    def _where(
+        self,
+        view="all",
+        feed_id=None,
+        folder_id=None,
+        unread=False,
+        q="",
+        tag=None,
+        titles_only=False,
+        **ignored,
+    ):
         where, args = ["a.deleted=0", "f.deleted=0"], []
         if feed_id:
             where.append("a.feed_id=?")
@@ -457,7 +503,8 @@ class Core:
             terms = regex.findall(r"[\p{L}\p{N}_]+", q)[:30]
             if terms:
                 where.append("a.rowid IN (SELECT rowid FROM article_search WHERE article_search MATCH ?)")
-                args.append(" AND ".join('"' + t + '"' for t in terms))
+                match = " AND ".join('"' + t + '"' for t in terms)
+                args.append("title : (" + match + ")" if titles_only else match)
             else:
                 where.append("0")
         return " AND ".join(where), args
@@ -474,9 +521,16 @@ class Core:
         offset=0,
         limit=100,
         deduplicate=True,
+        titles_only=False,
     ):
         where, args = self._where(
-            view=view, feed_id=feed_id, folder_id=folder_id, unread=unread, q=q, tag=tag
+            view=view,
+            feed_id=feed_id,
+            folder_id=folder_id,
+            unread=unread,
+            q=q,
+            tag=tag,
+            titles_only=titles_only,
         )
         if deduplicate and view != "starred":
             # A suppressed story must have an earlier surviving match. Evaluate
@@ -501,7 +555,11 @@ class Core:
           FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where} ORDER BY {order},a.id LIMIT ? OFFSET ?""",
             [*args, max(1, min(int(limit), 300)), max(0, int(offset))],
         )
-        return {"items": items, "total": total}
+        unread_total = self.one(
+            f"SELECT count(*) n FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where} AND a.read=0",
+            args,
+        )["n"]
+        return {"items": items, "total": total, "unread": unread_total}
 
     def article(self, id):
         a = self.one(
@@ -562,8 +620,16 @@ class Core:
                     )
         return {"ok": True, "undo": undo}
 
-    def mark_all(self, feed_id=None, folder_id=None, view="all", q="", tag=None):
-        where, args = self._where(feed_id=feed_id, folder_id=folder_id, view=view, q=q, tag=tag, unread=True)
+    def mark_all(self, feed_id=None, folder_id=None, view="all", q="", tag=None, titles_only=False):
+        where, args = self._where(
+            feed_id=feed_id,
+            folder_id=folder_id,
+            view=view,
+            q=q,
+            tag=tag,
+            unread=True,
+            titles_only=titles_only,
+        )
         # One snapshot, one transaction, regardless of stream size.
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
@@ -1434,6 +1500,16 @@ class Core:
             self.db.execute("BEGIN IMMEDIATE")
             walk(root)
         return {"imported": count}
+
+    def export_starred(self):
+        return {
+            "format": "feedelio-starred",
+            "version": 1,
+            "articles": self.rows(
+                """SELECT a.*,f.title feed_title FROM articles a JOIN feeds f ON f.id=a.feed_id
+               WHERE a.starred=1 AND a.deleted=0 AND f.deleted=0 ORDER BY a.published DESC"""
+            ),
+        }
 
     def export_opml(self):
         root = ET.Element("opml", version="2.0")

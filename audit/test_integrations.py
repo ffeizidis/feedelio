@@ -45,7 +45,7 @@ def test_restore_full_library_via_browser_and_export_opml(lab):
     assert p.locator('input[accept=".json"]').is_disabled()
     lab.close()
     lab.open_title("Restored article")
-    expect(p.locator(".article-tools").get_by_role("button", name="Saved", exact=True)).to_be_visible()
+    expect(p.get_by_role("button", name="Unsave article", exact=True)).to_be_visible()
     expect(p.locator(".transcript")).to_contain_text("Restored transcript")
     assert p.locator(".prose").evaluate("(e)=>getComputedStyle(e).fontSize") == "24px"
 
@@ -79,7 +79,7 @@ def test_mcp_actions_are_visible_in_real_browser(lab):
         executor.submit(lambda: asyncio.run(act())).result(timeout=20)
     lab.page.reload()
     lab.open_title(article["title"])
-    expect(lab.page.locator(".article-tools").get_by_role("button", name="Saved", exact=True)).to_be_visible()
+    expect(lab.page.get_by_role("button", name="Unsave article", exact=True)).to_be_visible()
 
 
 @pytest.mark.features(47, 52, 9, 26)

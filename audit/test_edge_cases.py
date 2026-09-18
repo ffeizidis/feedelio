@@ -93,7 +93,8 @@ def test_quiet_feed_detection_in_browser(lab):
         )
     lab.show()
     lab.manager("Subscriptions")
-    expect(lab.page.locator(".health")).to_have_text("Quiet for 90d")
+    expect(lab.page.locator(".feed-updated.issue")).to_contain_text("stale")
+    expect(lab.page.locator(".feed-issue")).to_have_attribute("title", "No new items in 14 days or more")
 
 
 @pytest.mark.features(8, 13, 20)
@@ -108,10 +109,11 @@ def test_pagination_search_and_filter_reset(lab):
     expect(p.locator(".article-row")).to_have_count(100)
     p.locator(".pagination").get_by_role("button", name="Next", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(5)
+    p.locator(".search-trigger").click()
     p.get_by_role("textbox", name="Search articles").fill("Pagination item 104")
     expect(p.locator(".article-row")).to_have_count(1)
-    expect(p.locator(".article-row h3")).to_have_text("Pagination item 104")
-    p.get_by_role("button", name="Clear search", exact=True).click()
+    expect(p.locator(".article-row .row-title")).to_have_text("Pagination item 104")
+    p.get_by_role("button", name="esc to close", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(100)
 
 
@@ -187,7 +189,7 @@ def test_feed_folder_mark_all_and_article_delete_undo(lab):
     expect(p.locator(".article-row")).to_have_count(2)
     p.get_by_role("button", name="Mark this stream as read", exact=True).click()
     lab.until(lambda: lab.api("overview")["counts"]["unread"] == 1)
-    p.keyboard.press("u")
+    p.keyboard.press("z")
     lab.until(lambda: lab.api("overview")["counts"]["unread"] == 3)
     p.locator(".feed-line").filter(has_text="Scoped one").click()
     p.get_by_role("button", name="Mark this stream as read", exact=True).click()
@@ -195,7 +197,7 @@ def test_feed_folder_mark_all_and_article_delete_undo(lab):
     lab.open_title("Scoped story one")
     p.locator(".secondary-tools").get_by_role("button", name="Delete", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(0)
-    p.keyboard.press("u")
+    p.keyboard.press("z")
     expect(p.locator(".article-row")).to_have_count(1)
 
 
@@ -267,11 +269,11 @@ def test_private_login_session_and_cross_origin_mutation(lab):
     attacker = p.context.new_page()
     attacker.goto(lab.publisher + "/hostile")
     result = attacker.evaluate(
-        """async base=>{try {let r=await fetch(base+'/api/actions/save_settings',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({payload:{values:{theme:'dark'}}})});return r.status;}catch{return 'blocked';}}""",
+        """async base=>{try {let r=await fetch(base+'/api/actions/save_settings',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({payload:{values:{theme:'light'}}})});return r.status;}catch{return 'blocked';}}""",
         lab.base,
     )
     assert result in ("blocked", 401, 403)
-    assert lab.api("overview")["settings"]["theme"] == "system"
+    assert lab.api("overview")["settings"]["theme"] == "dark"
     attacker.close()
 
 
@@ -328,6 +330,7 @@ def test_automatic_readability_and_provided_caption_track(lab):
     expect(lab.page.locator(".prose")).to_contain_text("atmospheric distortion")
     expect(lab.page.locator(".prose")).not_to_contain_text("Unrelated footer")
     expect(lab.page.locator(".transcript")).to_contain_text("Spectroheliography")
+    lab.page.locator(".search-trigger").click()
     lab.page.get_by_role("textbox", name="Search articles").fill("Spectroheliography")
     expect(lab.page.locator(".article-row")).to_have_count(1)
 

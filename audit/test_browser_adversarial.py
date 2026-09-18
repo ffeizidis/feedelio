@@ -75,7 +75,7 @@ def test_four_formats_opml_polling_conditional_get_and_bad_feed(lab):
     child = next(f for f in lab.api("overview")["folders"] if f["name"] == "Child")
     assert child["parent_id"] == parent["id"]
     assert next(f for f in lab.api("overview")["feeds"] if f["title"] == "Broken")["health"] == "error"
-    p.get_by_role("button", name="Back to list", exact=True).click()
+    p.keyboard.press("Escape")
     p.get_by_role("button", name="Refresh feeds (R)", exact=True).click()
     lab.finish_jobs()
     headers = [r["headers"] for r in lab.requests if r["path"] == "/rss"][-1]
@@ -91,28 +91,28 @@ def test_read_save_undo_history_sort_and_statistics(lab):
     p = lab.page
     lab.open_title("Newest")
     p.keyboard.press("s")
-    expect(p.locator(".article-tools").get_by_role("button", name="Saved", exact=True)).to_be_visible()
+    expect(p.get_by_role("button", name="Unsave article", exact=True)).to_be_visible()
     p.keyboard.press("m")
-    expect(p.locator(".article-tools").get_by_role("button", name="Unread", exact=True)).to_be_visible()
-    p.keyboard.press("u")
-    expect(p.locator(".article-tools").get_by_role("button", name="Read", exact=True)).to_be_visible()
-    p.get_by_role("button", name="Back to list", exact=True).click()
+    expect(p.get_by_role("button", name="Mark article read", exact=True)).to_be_visible()
+    p.keyboard.press("z")
+    expect(p.get_by_role("button", name="Mark article unread", exact=True)).to_be_visible()
+    p.keyboard.press("Escape")
     p.get_by_role("button", name="Mark this stream as read", exact=True).click()
     lab.until(lambda: lab.api("overview")["counts"]["unread"] == 0)
-    p.keyboard.press("u")
+    p.keyboard.press("z")
     lab.until(lambda: lab.api("overview")["counts"]["unread"] == 1)
     p.locator(".views").get_by_role("button", name="History", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(1)
     p.locator(".views").get_by_role("button", name=re.compile("All articles")).click()
     p.get_by_role("button", name="Newest first", exact=True).click()
-    expect(p.locator(".article-row h3").first).to_have_text("Older")
+    expect(p.locator(".article-row .row-title").first).to_have_text("Older")
     lab.manager("Activity")
     expect(p.locator(".stat-cards")).to_contain_text("Saved for later")
     assert lab.api("statistics")["totals"]["saved"] == 1
 
 
 @pytest.mark.features(8, 13)
-def test_keyboard_follows_visible_folder_group_order(lab):
+def test_keyboard_follows_visible_chronological_order(lab):
     a = lab.core.save_folder("Alpha")["id"]
     b = lab.core.save_folder("Beta")["id"]
     lab.seed(
@@ -126,14 +126,14 @@ def test_keyboard_follows_visible_folder_group_order(lab):
     lab.seed("Beta feed", [{"title": "Third visible", "published": stamp(2)}], b, "/beta")
     lab.show()
     p = lab.page
-    assert p.locator(".article-row h3").all_text_contents() == [
+    assert p.locator(".article-row .row-title").all_text_contents() == [
         "First visible",
-        "Second visible",
         "Third visible",
+        "Second visible",
     ]
     lab.open_title("First visible")
     p.keyboard.press("j")
-    expect(p.locator(".reading-content h1")).to_have_text("Second visible")
+    expect(p.locator(".reading-content h1")).to_have_text("Third visible")
 
 
 @pytest.mark.features(8, 9, 13)
@@ -147,7 +147,7 @@ def test_unread_keyboard_can_go_back_after_opening(lab):
     )
     lab.show()
     p = lab.page
-    p.get_by_role("button", name="Unread only", exact=True).click()
+    p.get_by_role("switch", name="Unread only", exact=True).click()
     p.keyboard.press("j")
     expect(p.locator(".reading-content h1")).to_have_text("First")
     expect(p.locator(".article-row")).to_have_count(2)
@@ -166,15 +166,15 @@ def test_typography_theme_and_persistence_at_200_percent(lab):
     lab.open_title("Typography")
     article = lab.api("articles/" + lab.api("articles")["items"][0]["id"])
     assert article["words"] == 480 and article["reading_minutes"] == 3
-    p.get_by_role("button", name="Reading appearance", exact=True).click()
+    lab.manager("Appearance")
     p.get_by_role("button", name="Dark", exact=True).click()
     expect(p.locator("html")).to_have_attribute("data-theme", "dark")
-    p.locator(".fonts button").nth(2).click()
-    p.get_by_role("slider", name=re.compile("Text size")).focus()
-    p.keyboard.press("End")
+    p.get_by_role("button", name="System", exact=True).click()
+    for _ in range(15):
+        p.get_by_role("button", name="Increase text size", exact=True).click()
+        p.wait_for_timeout(100)
     lab.until(lambda: lab.api("overview")["settings"]["font_size"] == 32)
-    p.get_by_role("slider", name=re.compile("Line length")).focus()
-    p.keyboard.press("Home")
+    p.get_by_role("button", name="Narrow", exact=True).click()
     lab.until(lambda: lab.api("overview")["settings"]["width"] == 45)
     p.get_by_role("slider", name=re.compile("Line spacing")).focus()
     p.keyboard.press("End")
@@ -182,13 +182,13 @@ def test_typography_theme_and_persistence_at_200_percent(lab):
     lab.close()
     p.reload()
     lab.open_title("Typography")
-    expect(p.locator(".reading-content")).to_have_class(re.compile("font-mono"))
+    expect(p.locator(".reading-content")).to_have_class(re.compile("font-sans"))
     assert p.locator(".prose").evaluate("(e)=>getComputedStyle(e).fontSize") == "32px"
     p.evaluate("document.documentElement.style.zoom='2'")
     expect(p.locator(".prose")).to_be_visible()
     p.evaluate("document.documentElement.style.zoom='1'")
-    p.get_by_role("button", name="Reading appearance", exact=True).click()
-    p.locator(".segmented").first.locator("button").first.click()
+    lab.manager("Appearance")
+    p.get_by_role("button", name="Match system", exact=True).click()
     p.emulate_media(color_scheme="dark")
     expect(p.locator("html")).to_have_attribute("data-theme", "system")
     assert p.locator("html").evaluate("(e)=>getComputedStyle(e).colorScheme") == "dark"
@@ -203,10 +203,10 @@ def test_nested_folder_cycle_bulk_rename_move_delete_undo(lab):
     lab.show()
     p = lab.page
     lab.manager("Folders")
-    form = p.locator(".folder-editor").filter(has=p.locator('input[value="Parent"]'))
-    form.get_by_role("combobox").select_option(child)
-    form.get_by_role("button", name="Save", exact=True).click()
-    expect(p.locator(".manager-body .inline-error")).to_contain_text("ancestors")
+    p.get_by_role("button", name="Edit folder Parent", exact=True).click()
+    # The redesign prevents cycles before submission by excluding descendants.
+    expect(p.locator(f'dialog select[name="parent"] option[value="{child}"]')).to_have_count(0)
+    p.get_by_role("button", name="Cancel", exact=True).click()
     lab.manager("Subscriptions")
     p.get_by_role("button", name="Edit First feed", exact=True).click()
     p.get_by_role("textbox", name="Custom title", exact=True).fill("Renamed journal")
@@ -220,9 +220,9 @@ def test_nested_folder_cycle_bulk_rename_move_delete_undo(lab):
     p.get_by_role("button", name="Set tags", exact=True).click()
     lab.until(lambda: all(f["tags"] == ["research", "reading"] for f in lab.api("overview")["feeds"]))
     p.locator(".bulk-bar").get_by_role("button", name="Delete", exact=True).click()
-    expect(p.locator(".feed-table>div")).to_have_count(0)
+    expect(p.locator(".feed-table>div:not(.table-head)")).to_have_count(0)
     lab.close()
-    p.keyboard.press("u")
+    p.keyboard.press("z")
     expect(p.locator(".article-row")).to_have_count(2)
 
 
@@ -242,6 +242,7 @@ def test_discovery_request_options_and_permanent_migration(lab):
     p.get_by_role("textbox", name="Website or feed URL").fill(base + "/home")
     p.get_by_role("button", name="Find feeds", exact=True).click()
     p.locator(".discovered button").first.click()
+    p.get_by_role("button", name="Subscribe", exact=True).click()
     lab.until(lambda: len(lab.api("overview")["feeds"]) == 1)
     lab.manager("Subscriptions")
     p.get_by_role("button", name=re.compile("^Edit ")).click()
@@ -287,10 +288,12 @@ def test_xss_tracking_stripping_and_no_image_requests_before_opt_in(lab):
     p.get_by_role("button", name=re.compile("Images are paused")).click()
     lab.until(lambda: any(r["path"] == "/picture.svg" for r in lab.requests))
     assert not any(r["path"] == "/pixel" for r in lab.requests)
-    p.get_by_role("button", name="Reading appearance", exact=True).click()
-    p.get_by_role("checkbox", name=re.compile("Load article images")).click()
+    lab.manager("Appearance")
+    p.get_by_role("switch", name=re.compile("Load article images")).click()
     lab.until(lambda: lab.api("overview")["settings"]["images"])
     lab.close()
+    lab.manager("Feeds")
+    p.get_by_role("button", name="Edit Audit feed", exact=True).click()
     lab.until(lambda: any(r["path"] == "/favicon.ico" for r in lab.requests))
 
 
@@ -308,8 +311,8 @@ def test_css_sized_tracking_pixel_is_removed(lab):
     lab.show()
     lab.open_title("CSS tracking pixel")
     p = lab.page
-    p.get_by_role("button", name="Reading appearance", exact=True).click()
-    p.get_by_role("checkbox", name=re.compile("Load article images")).click()
+    lab.manager("Appearance")
+    p.get_by_role("switch", name=re.compile("Load article images")).click()
     lab.until(lambda: lab.api("overview")["settings"]["images"])
     lab.close()
     p.wait_for_timeout(300)
@@ -346,8 +349,9 @@ def test_full_text_canonical_paywall_rewrite_transcript_search_and_obsidian(lab)
     lab.open_title("Summary article")
     expect(p.locator(".prose")).to_contain_text("replacement")
     expect(p.locator(".transcript")).to_contain_text("magnetospheres")
-    assert p.locator(".article-tools a").get_attribute("href") == base + "/canonical"
+    assert p.locator(".reading-content h1 a").get_attribute("href") == base + "/canonical"
     assert "paywall" in lab.api("articles/" + lab.api("articles")["items"][0]["id"])["tags"]
+    p.locator(".search-trigger").click()
     p.get_by_role("textbox", name="Search articles").fill("magnetospheres")
     expect(p.locator(".article-row")).to_have_count(1)
     lab.open_title("Summary article")
@@ -370,7 +374,7 @@ def test_duplicate_recovers_when_original_feed_is_deleted(lab):
     p.locator(".bulk-bar").get_by_role("button", name="Delete", exact=True).click()
     lab.close()
     expect(p.locator(".article-row")).to_have_count(1)
-    expect(p.locator(".row-meta .source")).to_have_text("Duplicate")
+    expect(p.locator(".row-feed")).to_have_text("Duplicate")
 
 
 @pytest.mark.features(11, 31, 32, 34)
@@ -533,7 +537,7 @@ def test_retention_and_archive_backfill_through_ui(lab):
     lab.finish_jobs()
     p.reload()
     expect(p.locator(".article-row")).to_have_count(3)
-    assert "Old disposable" not in p.locator(".article-row h3").all_text_contents()
+    assert "Old disposable" not in p.locator(".article-row .row-title").all_text_contents()
 
 
 @pytest.mark.features(48, 49, 33)
@@ -576,9 +580,11 @@ def test_hostile_search_bad_rules_and_backend_remains_responsive(lab):
     lab.show()
     p = lab.page
     for query in ['" OR title:* --', "'; DROP TABLE articles;--", "καλημέρα", "<script>alert(1)</script>"]:
+        p.locator(".search-trigger").click()
         p.get_by_role("textbox", name="Search articles").fill(query)
         lab.until(lambda: not p.locator(".article-list .spin").count())
         assert lab.api("overview")["counts"]["total"] == 1
+    p.locator(".search-trigger").click()
     p.get_by_role("textbox", name="Search articles").fill("")
     lab.manager("Rules")
     form = p.locator(".rule-form")

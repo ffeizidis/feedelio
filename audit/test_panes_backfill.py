@@ -9,12 +9,14 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab, viewport_widt
 
     def assert_pane_geometry():
         sidebar = lab.page.locator(".sidebar").bounding_box()
-        divider = lab.page.get_by_role("separator", name="Resize panes").bounding_box()
+        divider = lab.page.get_by_role("separator", name="Resize feeds pane").bounding_box()
+        listing = lab.page.locator(".stream-pane").bounding_box()
         reader = lab.page.locator(".reader-pane").bounding_box()
         assert sidebar["y"] == divider["y"] == reader["y"] == 0
         assert sidebar["height"] == divider["height"] == reader["height"] == 1000
-        assert abs(divider["x"] - (sidebar["x"] + sidebar["width"])) < 1
-        assert abs(reader["x"] - (divider["x"] + divider["width"])) < 1
+        assert abs(divider["x"] + 1 - (sidebar["x"] + sidebar["width"])) < 1
+        assert abs(listing["x"] - sidebar["width"]) < 1
+        assert abs(reader["x"] - listing["x"] - listing["width"]) < 1
         assert abs(reader["x"] + reader["width"] - viewport_width) < 1
 
     folder = lab.core.save_folder("Long reads")["id"]
@@ -29,7 +31,7 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab, viewport_widt
     lab.show()
     p = lab.page
     p.locator(".feed-line").filter(has_text="Journal").click()
-    expect(p.locator(".reader-pane .article-row")).to_have_count(35)
+    expect(p.locator(".stream-pane .article-row")).to_have_count(35)
     expect(p.locator(".sidebar .article-row")).to_have_count(0)
     assert_pane_geometry()
     listing = p.locator(".article-list")
@@ -39,27 +41,30 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab, viewport_widt
     listing.hover()
     p.mouse.wheel(0, 600)
     lab.until(lambda: listing.evaluate("e => e.scrollTop > 100"))
-    divider = p.get_by_role("separator", name="Resize panes")
+    divider = p.get_by_role("separator", name="Resize feeds pane")
     box = divider.bounding_box()
     p.mouse.move(box["x"] + 4, box["y"] + 200)
     p.mouse.down()
     p.mouse.move(box["x"] + 124, box["y"] + 200)
     p.mouse.up()
-    lab.until(lambda: lab.api("overview")["settings"]["sidebar_width"] > 400)
-    assert p.locator(".sidebar").bounding_box()["width"] > 400
+    lab.until(lambda: lab.api("overview")["settings"]["sidebar_width"] > 350)
+    assert p.locator(".sidebar").bounding_box()["width"] > 350
     assert_pane_geometry()
     divider.focus()
     p.keyboard.press("ArrowLeft")
     lab.until(lambda: lab.api("overview")["settings"]["sidebar_width"] < 440)
-    p.get_by_role("combobox", name="Article list display").select_option("title")
+    divider.blur()
+    p.keyboard.press("1")
     expect(p.locator(".article-row p")).to_have_count(0)
+    expect(p.locator(".article-list")).to_have_class("article-list title single-feed")
+    expect(p.locator(".row-feed")).to_have_count(0)
     p.reload()
-    expect(p.get_by_role("combobox", name="Article list display")).to_have_value("title")
-    assert p.locator(".sidebar").bounding_box()["width"] > 400
-    p.get_by_role("combobox", name="Article list display").select_option("preview")
+    expect(p.locator(".article-list")).to_have_class("article-list title")
+    assert p.locator(".sidebar").bounding_box()["width"] > 340
+    p.keyboard.press("2")
     expect(p.locator(".article-row p")).to_have_count(35)
-    p.locator(".article-row").first.click()
-    expect(listing).not_to_be_visible()
+    p.locator(".article-row .row-title").first.click()
+    expect(listing).to_be_visible()
     reading = p.locator(".reading-scroll")
     expect(reading).to_be_visible()
     assert_pane_geometry()
@@ -70,11 +75,11 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab, viewport_widt
     p.mouse.wheel(0, 800)
     lab.until(lambda: reading.evaluate("e => e.scrollTop > 100"))
     assert p.locator(".reader-pane").bounding_box()["height"] == 1000
-    p.get_by_role("button", name="Back to list", exact=True).click()
+    p.keyboard.press("Escape")
     expect(listing).to_be_visible()
     p.locator(".folder-line > button:not(.disclosure)").filter(has_text="Long reads").click()
-    expect(p.locator(".reader-pane .list-heading h1")).to_have_text("Long reads")
-    expect(p.locator(".reader-pane .article-row")).to_have_count(35)
+    expect(p.locator(".stream-pane .list-heading h1")).to_have_text("Long reads")
+    expect(p.locator(".stream-pane .article-row")).to_have_count(35)
     assert_pane_geometry()
 
 
@@ -84,6 +89,8 @@ def test_archive_progress_pause_resume_and_failure_visible(lab):
     job = lab.core.enqueue("backfill", {"feed_id": feed})["id"]
     lab.show()
     p = lab.page
+    lab.manager("Feeds")
+    p.get_by_role("button", name="Edit Archive source", exact=True).click()
     progress = p.get_by_label("Archive progress")
     expect(progress).to_contain_text("Archive waiting")
     p.get_by_role("button", name="Pause archive", exact=True).click()
@@ -96,5 +103,7 @@ def test_archive_progress_pause_resume_and_failure_visible(lab):
             (job,),
         )
     p.reload()
+    lab.manager("Feeds")
+    p.get_by_role("button", name="Edit Archive source", exact=True).click()
     expect(progress).to_contain_text("archive access unavailable")
     expect(p.get_by_role("button", name="Resume archive", exact=True)).to_be_visible()

@@ -132,6 +132,7 @@ def articles(
     offset: int = 0,
     limit: int = 100,
     deduplicate: bool = True,
+    titles_only: bool = False,
 ):
     with Core() as core:
         return core.articles(**locals_without_core(locals()))
@@ -177,6 +178,11 @@ def export(format: str):
         if format == "json":
             return JSONResponse(
                 core.backup(), headers={"Content-Disposition": 'attachment; filename="feedelio.json"'}
+            )
+        if format == "starred":
+            return JSONResponse(
+                core.export_starred(),
+                headers={"Content-Disposition": 'attachment; filename="feedelio-starred.json"'},
             )
         raise HTTPException(404)
 

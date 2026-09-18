@@ -14,6 +14,7 @@ def test_mark_filtered_stream_leaves_unrelated_articles_unread(lab, view):
     lab.show()
     p = lab.page
     if view == "search":
+        p.locator(".search-trigger").click()
         p.get_by_role("textbox", name="Search articles").fill("Target")
     elif view == "saved":
         p.locator(".views").get_by_role("button", name=re.compile("Saved")).click()
@@ -22,14 +23,14 @@ def test_mark_filtered_stream_leaves_unrelated_articles_unread(lab, view):
     else:
         lab.open_title("Target story")
         p.keyboard.press("m")
-        expect(p.locator(".article-tools").get_by_role("button", name="Unread", exact=True)).to_be_visible()
+        expect(p.get_by_role("button", name="Mark article read", exact=True)).to_be_visible()
         p.locator(".article-tags").get_by_role("button", name="target", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(1)
     p.get_by_role("button", name="Mark this stream as read", exact=True).click()
     lab.until(lambda: lab.api("articles/" + target)["read"])
     articles = lab.api("articles?deduplicate=false")["items"]
     assert not next(a for a in articles if a["title"] == "Unrelated story")["read"]
-    p.keyboard.press("u")
+    p.keyboard.press("z")
     lab.until(lambda: not lab.api("articles/" + target)["read"])
     assert lab.api("overview")["counts"]["unread"] == 2
 
@@ -39,11 +40,11 @@ def test_unread_pagination_recovers_when_last_page_disappears(lab):
     lab.seed(articles=[{"title": f"Article {i}"} for i in range(101)])
     lab.show()
     p = lab.page
-    p.get_by_role("button", name="Unread only", exact=True).click()
+    p.get_by_role("switch", name="Unread only", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(100)
     p.locator(".pagination").get_by_role("button", name=re.compile("Next")).click()
     expect(p.locator(".article-row")).to_have_count(1)
-    p.locator(".article-row").click()
+    p.locator(".article-row .row-title").click()
     expect(p.locator(".reading-content h1")).to_be_visible()
     expect(p.locator(".article-row")).to_have_count(100)
     assert lab.api("overview")["counts"]["unread"] == 100

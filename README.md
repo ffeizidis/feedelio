@@ -1,6 +1,6 @@
 # Feedelio
 
-A private, single-user, keyboard-first desktop RSS reader. The left pane contains your folders and subscriptions; the right pane shows the selected stream's article list or the opened article. Drag the divider to resize, choose titles or previews, and use **Back to list** (or Escape) to return. Both list and article body scroll independently within the desktop shell. No mobile layout or multi-user accounts.
+A private, single-user, keyboard-first desktop RSS reader. Three persistent panes hold folders/subscriptions, the article list, and the reader. Drag either boundary to resize. Only article titles open stories; read circles, stars, and feed labels have independent actions. Lists and article bodies scroll independently. No mobile layout or multi-user accounts.
 
 ## Run with Docker
 
@@ -8,7 +8,7 @@ A private, single-user, keyboard-first desktop RSS reader. The left pane contain
 docker compose up --build -d
 ```
 
-Open **http://localhost:8000** — no login is required in the default local Docker configuration. Keep its port bound to localhost. Import your Inoreader OPML under **Manage library → Data & connections**, or press **A** to add a feed. The library starts empty; no sample subscriptions are added.
+Open **http://localhost:8000** — no login is required in the default local Docker configuration. Keep its port bound to localhost. Import your Inoreader OPML under **Manage library → Import & export**, or press **a** to add a feed. The library starts empty; no sample subscriptions are added.
 
 Without the Compose plugin:
 
@@ -64,10 +64,10 @@ All requested areas have an implementation. Integrations that depend on a publis
 | Requested features | Implementation |
 | --- | --- |
 | 1–4: feed formats, conditional GET, deduplication | RSS 2.0, RSS 1.0, Atom and JSON Feed 1.1 through reader. ETag/Last-Modified caching. Normalized GUID, nonempty article URL and content hash deduplication; changed publisher content is updated while extracted content and reading state survive. |
-| 5, 18–19: polling, intervals, health | Durable worker queue; manual refresh; per-feed manual interval or median recent posting-gap calculation, recalculated each fetch. Error backoff, last-check status and a 90-day quiet-feed indicator. A quiet feed is flagged, never automatically deleted. |
-| 6–8, 14–17, 24–25: subscriptions and layout | Nested OPML import/export; validated strict folder tree with exactly one folder per feed; recursive unread counts; custom titles; site favicons; page and YouTube channel feed discovery; bulk move/tag/delete; two-pane desktop shell. |
+| 5, 18–19: polling, intervals, health | Durable worker queue; manual refresh; per-feed manual interval or median recent posting-gap calculation, recalculated each fetch. Error backoff, last-check status and a 14-day stale-feed indicator in the UI (the core health summary retains its 90-day quiet threshold). A quiet feed is flagged, never automatically deleted. |
+| 6–8, 14–17, 24–25: subscriptions and layout | Nested OPML import/export; validated strict folder tree with exactly one folder per feed; recursive unread counts; custom titles; site favicons; page and YouTube channel feed discovery; bulk move/tag/delete; three-pane resizable desktop shell. |
 | 9–13, 26–27: reading state | Read/unread and independent stars; mark feed/folder/all read; newest/oldest ordering; hide-read; system/manual dark mode; undo article changes and subscription deletion; recently-read ordering. Undo records expire after seven days during retention maintenance. |
-| 20–22, 42: reading and search | SQLite FTS5 over titles, processed full text and transcripts; word counts and 230-wpm estimates; serif/sans/mono, size, width and line-height controls. Literal search terms are combined with AND. |
+| 20–22, 42: reading and search | SQLite FTS5 over titles, processed full text and transcripts; word counts and 230-wpm estimates; Georgia/Newsreader/system (and legacy mono), size, width and line-height controls. Literal search terms are combined with AND. |
 | 23: feed migration | Successful redirect chains made entirely of permanent 301/308 redirects migrate the subscription URL while preserving its identity and articles. Temporary redirects are not treated as permanent moves. |
 | 28–30, 33–35: content processing | Queued Trafilatura extraction; custom CSS selectors; sanitization; small/hidden pixel removal; UTM and known click-ID stripping; custom UA, cookies and HTTP proxy; timed regex rewrite rules; canonical URL resolution and structured-data paywall detection. |
 | 31–32: duplicates and rules | Near-identical recent cross-feed titles can be hidden; saved stories remain visible. Ordered match → read/star/tag/drop/rewrite rules, per feed or global; presets for Shorts URLs and detected paywall tags. Rules can be reapplied to stored articles. |
@@ -86,7 +86,7 @@ All requested areas have an implementation. Integrations that depend on a publis
 - Paywall detection uses `isAccessibleForFree: false` in source-page JSON-LD after extraction. Feed-text rules can catch other signals. Canonical resolution does not unlock subscription-only content. Enable automatic extraction on feeds where these tags should be detected automatically.
 - YouTube feed items usually link to `/watch`; Shorts filtering catches items whose URL identifies `/shorts/`. The feed does not reliably label every Short, so the preset cannot classify all short videos.
 - Captions must actually be provided and accessible. YouTube page formats and third-party Invidious/RSSHub availability can change. There is no audio-to-text generation or guaranteed transcript availability.
-- Backfill starts automatically after the first successful refresh, including existing subscriptions on upgrade. It makes at most one archive-page/article operation per minute across the worker, checkpoints after every step, and yields to other jobs between steps. HTTP redirects can require additional requests within an operation. Substack listings are fetched 20 at a time, then missing article pages individually; existing articles are skipped. Progress, pause/resume and errors appear above the article list. Transient failures use exponential backoff and honor `Retry-After`, stopping after five failed attempts until resumed. Backups include progress and pacing deadlines.
+- Backfill starts automatically after the first successful refresh, including existing subscriptions on upgrade. It makes at most one archive-page/article operation per minute across the worker, checkpoints after every step, and yields to other jobs between steps. HTTP redirects can require additional requests within an operation. Substack listings are fetched 20 at a time, then missing article pages individually; existing articles are skipped. Progress, pause/resume and errors appear in the feed’s settings under Manage library → Feeds. Transient failures use exponential backoff and honor `Retry-After`, stopping after five failed attempts until resumed. Backups include progress and pacing deadlines.
 - Backfill can only retrieve history the publisher exposes. A feed without pagination reports that explicitly; configure **Archive feed URL** when available. Substack support uses its public archive endpoint on `*.substack.com`; custom domains without feed pagination need an explicit archive feed. It does not unlock paywalls, solve anti-bot challenges, or guarantee full text for every post; accessible body/preview text is stored. Scrapers operate on server-rendered HTML; JavaScript-only sites need an external feed bridge.
 - Offline episodes are offline **on the server**; the browser still needs a connection to Feedelio. JSON backups containing audio can be large and are assembled in memory; for large libraries, also take a stopped-container volume snapshot. Default JSON import limit: 2 GiB, configurable with `FEEDELIO_MAX_IMPORT_MB`.
 
@@ -98,15 +98,22 @@ All requested areas have an implementation. Integrations that depend on a publis
 | Space | Page down in the reading pane |
 | S | Save / unsave |
 | M | Read / unread |
-| U | Undo last change |
+| U | Unread-only toggle |
+| Z | Undo last change |
 | / | Search |
 | O | Open original |
 | R | Queue refresh |
-| A | Add subscription |
+| a / Shift+A | Add subscription / mark current stream read |
+| Enter / Shift+Enter | Open selected article in reader / original page |
+| N / P | Next / previous feed |
+| g then a / g then s | All articles / Saved |
+| [ / ] | Narrow / widen article list |
+| 1 / 2 / 3 | Titles / snippets / compact list |
+| , | Manage library |
 | ? | Shortcut guide |
-| Escape | Back to the list / clear search |
+| Escape | Close search, sheet, or selected article |
 
-Focus the pane divider and use Left/Right (20 px steps), Home or End to resize without a mouse. Divider width and title/preview preference are saved in the library.
+Focus either pane boundary and use Left/Right (20 px steps), Home or End to resize without a mouse. Widths and appearance preferences are saved in the library. **Manage library → Appearance** controls themes, accents, stable feed colours, counts/dots, wordmark, motion, list mode, reading fonts and density, and whether title clicks open the reader or original page. The default is dark, blue, 38px titles-only rows, and 17px Georgia. Existing preferences are preserved. Fonts are served locally, not from Google.
 
 Shortcuts pause while typing or using a dialog. At 200% zoom the fixed desktop shell may scroll horizontally; it never changes into a mobile layout.
 

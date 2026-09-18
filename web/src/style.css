@@ -1635,9 +1635,6 @@ dialog::backdrop {
   }
 }
 @media (min-width: 1600px) {
-  .shell {
-    grid-template-columns: 450px minmax(450px, 1fr);
-  }
   .reading-content {
     padding-top: 65px;
   }

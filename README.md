@@ -5,18 +5,17 @@ A private, single-user, keyboard-first desktop RSS reader. The left pane contain
 ## Run with Docker
 
 ```sh
-export FEEDELIO_TOKEN="$(openssl rand -hex 32)"
 docker compose up --build -d
 ```
 
-Keep that token in your password manager (or a private `.env` file for Compose). Open **http://localhost:8000** and sign in with it. Import your Inoreader OPML under **Manage library → Data & connections**, or press **A** to add a feed. The library starts empty; no sample subscriptions are added.
+Open **http://localhost:8000** — no login is required in the default local Docker configuration. Keep its port bound to localhost. Import your Inoreader OPML under **Manage library → Data & connections**, or press **A** to add a feed. The library starts empty; no sample subscriptions are added.
 
 Without the Compose plugin:
 
 ```sh
 docker build -t feedelio:local .
 docker run -d --name feedelio --restart unless-stopped \
-  -e FEEDELIO_TOKEN -p 127.0.0.1:8000:8000 -v feedelio-data:/data feedelio:local
+  -e FEEDELIO_NO_AUTH=1 -p 127.0.0.1:8000:8000 -v feedelio-data:/data feedelio:local
 ```
 
 One image runs **two independent processes**, supervised by Supervisor: Uvicorn for HTTP and `feedelio.worker` for polling, extraction, downloads, backfill, retention and rule jobs. Data lives in `/data`; keep this volume across upgrades. The worker holds an OS file lock, recovers interrupted jobs at startup and checks for work every ten seconds. Do not run multiple replicas against the same database.
@@ -138,7 +137,7 @@ For the Docker instance, use command `docker` with args `["exec", "-i", "feedeli
 
 The image is suitable for a **single Linux host**, including EC2, with a persistent local block-backed volume (for example EBS). Run one container with `/data` on that volume. SQLite WAL should not be placed on EFS/NFS, and this configuration is not intended for horizontally scaled ECS tasks.
 
-For a remotely reachable instance, set a strong `FEEDELIO_TOKEN`, use HTTPS through your reverse proxy/load balancer, and restrict the instance's inbound network access to your own access path. The local Compose mapping intentionally binds port 8000 to loopback. An SSH tunnel also works without exposing the app port:
+For a remotely reachable instance, set `FEEDELIO_NO_AUTH=0` and a strong `FEEDELIO_TOKEN`, use HTTPS through your reverse proxy/load balancer, and restrict the instance's inbound network access to your own access path. The local Compose mapping intentionally binds port 8000 to loopback. An SSH tunnel also works without exposing the app port:
 
 ```sh
 ssh -L 8000:127.0.0.1:8000 your-host
@@ -149,7 +148,8 @@ The single access token provides an HTTP-only, SameSite session cookie or Bearer
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
 | `FEEDELIO_DATA` | `data` (`/data` in Docker) | Persistent library directory |
-| `FEEDELIO_TOKEN` | empty | Single-user access token; required for Docker, proxies and non-loopback peers |
+| `FEEDELIO_NO_AUTH` | `0` (`1` in Compose) | Disable login for localhost-published Docker; overrides any token |
+| `FEEDELIO_TOKEN` | empty | Optional single-user access token; required for remotely exposed instances |
 | `FEEDELIO_STATIC` | `web/dist` | Built frontend directory |
 | `FEEDELIO_ALLOW_PRIVATE_NETWORK` | `0` | Allow private-network feeds/proxies when `1` |
 | `FEEDELIO_MAX_EPISODE_MB` | `500` | Maximum bytes per downloaded episode, in MiB |
@@ -157,7 +157,7 @@ The single access token provides an HTTP-only, SameSite session cookie or Bearer
 
 Backups contain your feed cookie/proxy settings as well as reading data. Keep exported files private. To upgrade: export a backup, rebuild the image, then recreate the container with the same volume. This first release has a versioned export format; future database schema changes require migrations.
 
-Token-free access is limited to direct loopback clients using a loopback hostname. Docker bridge peers and reverse proxies must use a token even when published on localhost; `Host: localhost` alone is not proof of a local client. Keep Uvicorn's forwarded-header trust restricted to your actual trusted proxy. Before upgrading an older token-free Docker installation, configure `FEEDELIO_TOKEN`; your volume and library remain unchanged.
+Without explicit no-login mode, token-free access is limited to direct loopback clients using a loopback hostname. `FEEDELIO_NO_AUTH=1` also permits Docker bridge peers using a loopback hostname, without sessions or login. This mode relies on the localhost port binding, not the Host header, for network isolation: anyone who can reach the service can control the library. Never expose it publicly or through an unprotected reverse proxy. Cross-origin mutation and non-loopback Host checks remain enabled. Keep Uvicorn's forwarded-header trust restricted to your actual trusted proxy.
 
 ## Verification
 

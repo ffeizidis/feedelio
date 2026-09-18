@@ -3,7 +3,20 @@ from playwright.sync_api import expect
 
 
 @pytest.mark.features(7, 8, 13, 22)
-def test_right_pane_streams_scroll_resize_and_persist_display(lab):
+@pytest.mark.parametrize("viewport_width", [1440, 1599, 1600, 1900, 2560])
+def test_right_pane_streams_scroll_resize_and_persist_display(lab, viewport_width):
+    lab.page.set_viewport_size({"width": viewport_width, "height": 1000})
+
+    def assert_pane_geometry():
+        sidebar = lab.page.locator(".sidebar").bounding_box()
+        divider = lab.page.get_by_role("separator", name="Resize panes").bounding_box()
+        reader = lab.page.locator(".reader-pane").bounding_box()
+        assert sidebar["y"] == divider["y"] == reader["y"] == 0
+        assert sidebar["height"] == divider["height"] == reader["height"] == 1000
+        assert abs(divider["x"] - (sidebar["x"] + sidebar["width"])) < 1
+        assert abs(reader["x"] - (divider["x"] + divider["width"])) < 1
+        assert abs(reader["x"] + reader["width"] - viewport_width) < 1
+
     folder = lab.core.save_folder("Long reads")["id"]
     lab.seed(
         "Journal",
@@ -18,6 +31,7 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab):
     p.locator(".feed-line").filter(has_text="Journal").click()
     expect(p.locator(".reader-pane .article-row")).to_have_count(35)
     expect(p.locator(".sidebar .article-row")).to_have_count(0)
+    assert_pane_geometry()
     listing = p.locator(".article-list")
     assert listing.evaluate("e => e.scrollHeight > e.clientHeight")
     assert listing.evaluate("e => getComputedStyle(e).overflowY") == "scroll"
@@ -33,6 +47,7 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab):
     p.mouse.up()
     lab.until(lambda: lab.api("overview")["settings"]["sidebar_width"] > 400)
     assert p.locator(".sidebar").bounding_box()["width"] > 400
+    assert_pane_geometry()
     divider.focus()
     p.keyboard.press("ArrowLeft")
     lab.until(lambda: lab.api("overview")["settings"]["sidebar_width"] < 440)
@@ -47,6 +62,7 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab):
     expect(listing).not_to_be_visible()
     reading = p.locator(".reading-scroll")
     expect(reading).to_be_visible()
+    assert_pane_geometry()
     assert reading.evaluate("e => e.scrollHeight > e.clientHeight")
     assert reading.evaluate("e => getComputedStyle(e).overflowY") == "scroll"
     assert reading.evaluate("e => e.offsetWidth - e.clientWidth") >= 12
@@ -59,6 +75,7 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab):
     p.locator(".folder-line > button:not(.disclosure)").filter(has_text="Long reads").click()
     expect(p.locator(".reader-pane .list-heading h1")).to_have_text("Long reads")
     expect(p.locator(".reader-pane .article-row")).to_have_count(35)
+    assert_pane_geometry()
 
 
 @pytest.mark.features(5, 46)

@@ -25,9 +25,13 @@ def session_token(token):
     return hmac.new(token.encode(), b"feedelio-session-v1", hashlib.sha256).hexdigest()
 
 
+def access_token():
+    return "" if os.getenv("FEEDELIO_NO_AUTH") == "1" else os.getenv("FEEDELIO_TOKEN", "")
+
+
 @app.middleware("http")
 async def protect(request: Request, call_next):
-    token = os.getenv("FEEDELIO_TOKEN", "")
+    token = access_token()
     path = request.url.path
     protected = path.startswith("/api/") and path not in ("/api/login", "/api/health")
     bearer = request.headers.get("authorization", "").removeprefix("Bearer ")
@@ -40,7 +44,10 @@ async def protect(request: Request, call_next):
         local_peer = bool(request.client) and ipaddress.ip_address(request.client.host).is_loopback
     except ValueError:
         local_peer = False
-    if protected and not token and not (local_host and local_peer):
+    # Explicit opt-in for loopback-published Docker, whose peer is a bridge address.
+    # Network isolation is the operator's responsibility in no-login mode.
+    local_access = local_host and (local_peer or os.getenv("FEEDELIO_NO_AUTH") == "1")
+    if protected and not token and not local_access:
         return JSONResponse(
             {"detail": "Set FEEDELIO_TOKEN for non-loopback access, including Docker and reverse proxies."},
             status_code=403,
@@ -90,7 +97,9 @@ def health():
 
 @app.post("/api/login")
 def login(command: Command, request: Request):
-    token = os.getenv("FEEDELIO_TOKEN", "")
+    token = access_token()
+    if not token:
+        return JSONResponse({"ok": True})
     if token and not hmac.compare_digest(str(command.payload.get("token", "")), token):
         raise HTTPException(401, "Incorrect access token.")
     response = JSONResponse({"ok": True})

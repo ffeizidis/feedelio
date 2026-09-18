@@ -38,6 +38,33 @@ def test_local_extension_and_rebinding_guard(core):
         assert client.get("/api/overview", headers={"Host": "untrusted.example"}).status_code == 403
 
 
+def test_explicit_no_login_docker_mode(core, monkeypatch):
+    monkeypatch.setenv("FEEDELIO_NO_AUTH", "1")
+    monkeypatch.setenv("FEEDELIO_TOKEN", "old-token-is-ignored")
+    with TestClient(app, base_url="http://localhost:8000", client=("172.17.0.1", 40000)) as client:
+        assert client.get("/api/overview").status_code == 200
+        assert (
+            client.post(
+                "/api/actions/save_settings",
+                json={"payload": {"values": {"theme": "dark"}}},
+                headers={"Origin": "http://localhost:8000"},
+            ).status_code
+            == 200
+        )
+        assert not client.cookies
+        assert client.post("/api/login", json={"payload": {}}).status_code == 200
+        assert not client.cookies
+        assert client.get("/api/overview", headers={"Host": "evil.example"}).status_code == 403
+        assert (
+            client.post(
+                "/api/actions/mark_all",
+                json={"payload": {}},
+                headers={"Origin": "https://evil.example"},
+            ).status_code
+            == 403
+        )
+
+
 def test_auth_csrf_and_command_allowlist(core, monkeypatch):
     monkeypatch.setenv("FEEDELIO_TOKEN", "private-test-token")
     with TestClient(app) as client:

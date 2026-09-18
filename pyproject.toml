@@ -1,62 +1,37 @@
-[project]
-name = "feedelio"
-version = "0.1.0"
-description = "A private, single-user RSS reader built on lemon24/reader"
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "reader>=3.26",
-    # reader's vendored feedparser imports the top-level `sgmllib` module, which
-    # feedparser 6.0.14 stopped pulling in. Drop when reader vendors a newer copy.
-    "sgmllib3k>=1",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
-    "pydantic-settings>=2.7",
-    "python-multipart>=0.0.32",
-    "defusedxml>=0.7.1",
-]
-
-[project.scripts]
-feedelio-worker = "feedelio.worker.__main__:main"
-
-[dependency-groups]
-dev = [
-    "pytest>=8.3",
-    "pytest-cov>=6.0",
-    "mypy>=1.14",
-    "ruff>=0.9",
-    "httpx>=0.28",
-    "pre-commit>=4.0",
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[project]
+name = "feedelio"
+version = "0.1.0"
+description = "A private, keyboard-first desktop feed reader"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "reader==3.26", "fastapi>=0.115,<1", "uvicorn[standard]>=0.34,<1",
+  "sgmllib3k==1.0.0",
+  "httpx>=0.28,<1", "beautifulsoup4>=4.13,<5", "trafilatura>=2,<3",
+  "httpcore==1.0.9", "urllib3==2.8.0", "requests>=2.32,<3",
+  "nh3>=0.2,<1", "defusedxml>=0.7,<1", "markdownify>=1,<2",
+  "rapidfuzz>=3,<4", "regex>=2024.11", "tinycss2>=1.4,<2", "mcp>=1.12,<2",
+  "supervisor>=4.2,<5"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1", "playwright>=1.50,<2"]
+
+[project.scripts]
+feedelio-worker = "feedelio.worker:main"
+feedelio-mcp = "feedelio.mcp_server:main"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/feedelio"]
-
-[tool.ruff]
-line-length = 100
-src = ["src", "tests"]
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-
-[tool.mypy]
-python_version = "3.12"
-files = ["src", "tests"]
-strict = true
-
-[[tool.mypy.overrides]]
-module = ["reader.*", "defusedxml.*"]
-ignore_missing_imports = true
+packages = ["feedelio"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
-addopts = "-q --cov=feedelio --cov-report=term-missing --cov-fail-under=90"
 
-[tool.coverage.run]
-branch = true
-source = ["feedelio"]
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

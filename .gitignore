@@ -1,31 +1,11 @@
-# Python
-__pycache__/
-*.py[cod]
 .venv/
+__pycache__/
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
-.coverage
-coverage.xml
-htmlcov/
-dist/
-*.egg-info/
-
-# Node
 node_modules/
-frontend/dist/
-src/feedelio/static/
-
-# Playwright
-e2e/test-results/
-e2e/playwright-report/
-
-# Agent worktrees only. `.claude/skills/` is checked in — narrow this and
-# nothing else, or committed skills silently vanish from git.
-.claude/worktrees/
-
-# Runtime
+web/dist/
 data/
-*.sqlite
-*.sqlite-*
+*.sqlite*
+test-results/
 .env
+

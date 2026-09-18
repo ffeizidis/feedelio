@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Feedelio companion settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Feedelio companion</h1>
+      <p>A small bridge between your browser and your reading space.</p>
+      <form id="settings">
+        <label
+          >Feedelio server URL<input
+            id="server"
+            type="url"
+            required
+            placeholder="http://localhost:8000" /></label
+        ><label
+          >Access token<input
+            id="token"
+            type="password"
+            autocomplete="off" /></label
+        ><label class="check"
+          ><input id="sync" type="checkbox" />Sync Chrome Reading List every
+          minute</label
+        >
+        <p>
+          Reading List URLs, titles and read states are sent only to the server
+          above. Read changes sync in both directions. Deletions do not
+          propagate.
+        </p>
+        <button>Save & sync</button>
+      </form>
+      <p id="status" role="status"></p>
+    </main>
+    <script src="options.js" type="module"></script>
+  </body>
+</html>

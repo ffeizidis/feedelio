@@ -1,61 +1,90 @@
-"""Shared fixtures.
-
-Every test gets its own SQLite database and reads feeds from
-``tests/fixtures`` instead of the network.
-"""
-
-from __future__ import annotations
-
-from collections.abc import Iterator
-from pathlib import Path
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from feedelio.config import Settings
-from feedelio.core import Core, make_core
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-#: Path of the sample feed, relative to ``feed_root``.
-SAMPLE_FEED = "sample.atom"
-
-#: One fixture per syndication format, with the version reader reports for it,
-#: so that "we parse all three" is something tests can assert directly.
-FEED_FORMATS = {SAMPLE_FEED: "atom10", "sample.rss": "rss20", "sample.rdf": "rss10"}
-
-#: A subscription list shaped like the one Inoreader hands you: categories with
-#: feeds in them, a nested category, an empty one, and an uncategorised feed at
-#: the top level. Its feeds are ``https://`` URLs on purpose — importing must
-#: not fetch, so nothing here can reach the network.
-INOREADER_OPML = FIXTURES / "inoreader.opml"
+from feedelio.core import Core
 
 
 @pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings(
-        db_path=tmp_path / "feedelio.sqlite",
-        static_dir=tmp_path / "static",
-        feed_root=str(FIXTURES),
+def core(tmp_path, monkeypatch):
+    monkeypatch.setenv("FEEDELIO_ALLOW_PRIVATE_NETWORK", "1")
+    monkeypatch.setenv("FEEDELIO_DATA", str(tmp_path))
+    with Core(tmp_path) as core:
+        yield core
+
+
+@pytest.fixture
+def site():
+    routes = {}
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.path, dict(self.headers)))
+            status, headers, body = routes.get(self.path, (404, {}, "not found"))
+            if headers.get("ETag") and self.headers.get("If-None-Match") == headers["ETag"]:
+                status, body = 304, ""
+            self.send_response(status)
+            for k, v in headers.items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body if isinstance(body, bytes) else body.encode())
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    routes["/rss"] = (
+        200,
+        {"Content-Type": "application/rss+xml", "ETag": '"feed-v1"'},
+        f"""<rss version="2.0"><channel><title>Test journal</title><link>{base}</link><description>A feed</description>
+        <item><guid isPermaLink="false">one</guid><title>A slower and more thoughtful internet</title><link>{base}/article?utm_source=rss</link>
+        <description><![CDATA[<p>Independent publishing and a quiet reading ritual.</p>]]></description></item></channel></rss>""",
     )
-
-
-@pytest.fixture
-def core(settings: Settings) -> Iterator[Core]:
-    with make_core(settings) as service:
-        yield service
-
-
-@pytest.fixture
-def loaded_core(core: Core) -> Core:
-    """A core with the sample feed subscribed and fetched."""
-    core.reader.add_feed(SAMPLE_FEED)
-    core.update_feeds(scheduled=False)
-    return core
-
-
-@pytest.fixture
-def all_formats_core(core: Core) -> Core:
-    """A core subscribed to one feed of every supported format."""
-    for url in FEED_FORMATS:
-        core.subscribe(url)
-    return core
+    routes["/json"] = (
+        200,
+        {"Content-Type": "application/feed+json"},
+        json.dumps(
+            {
+                "version": "https://jsonfeed.org/version/1.1",
+                "title": "JSON journal",
+                "items": [
+                    {
+                        "id": "json-one",
+                        "title": "JSON story",
+                        "url": base + "/json-story",
+                        "content_text": "Typed text, safely parsed.",
+                    }
+                ],
+            }
+        ),
+    )
+    routes["/atom"] = (
+        200,
+        {"Content-Type": "application/atom+xml"},
+        f'''<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom journal</title><id>{base}/atom</id><updated>2026-09-15T12:00:00Z</updated><entry><id>atom-one</id><title>Atom story</title><updated>2026-09-15T12:00:00Z</updated><link href="{base}/atom-story"/><content type="html">&lt;p&gt;Atom article body.&lt;/p&gt;</content></entry></feed>''',
+    )
+    routes["/rdf"] = (
+        200,
+        {"Content-Type": "application/rdf+xml"},
+        f'''<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/"><channel rdf:about="{base}/rdf"><title>RSS one</title><link>{base}</link><description>RDF feed</description></channel><item rdf:about="{base}/rdf-story"><title>RDF story</title><link>{base}/rdf-story</link><description>RSS 1.0 body</description></item></rdf:RDF>''',
+    )
+    routes["/article"] = (
+        200,
+        {"Content-Type": "text/html"},
+        f'''<html><head><title>A full story</title><link rel="canonical" href="{base}/canonical?utm_medium=amp"/><script type="application/ld+json">{{"isAccessibleForFree":false}}</script></head><body><article><h1>A full story</h1><p>Longform reading has a rhythm all its own. A slow morning gives us room for curiosity and attention.</p><p>Quasar observatories give scientists a different perspective on the universe.</p></article><div class="transcript">Supplied transcript about photosynthesis.</div></body></html>''',
+    )
+    routes["/home"] = (
+        200,
+        {"Content-Type": "text/html"},
+        '<html><head><link rel="alternate" type="application/rss+xml" title="Journal" href="/rss"/></head></html>',
+    )
+    yield base, routes, requests
+    server.shutdown()
+    server.server_close()
+    thread.join()

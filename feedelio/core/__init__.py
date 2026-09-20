@@ -16,6 +16,7 @@ import sqlite3
 import statistics
 import uuid
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from reader.discover import from_http_response
 
 from . import backfill as archives
 from .content import (
+    UnresolvedHost,
     clean_url,
     embed_url,
     extract,
@@ -1011,7 +1013,15 @@ class Core:
                                 feed_id,
                             ),
                         )
-                    if moved and moved[-1] != f["url"]:
+                    # Follow a permanent move unless the destination is already a
+                    # subscription (a duplicate in an import, or a blog that moved
+                    # onto a feed the user also subscribed to): the old URL keeps
+                    # redirecting, and renaming would only fail on the unique URL.
+                    if (
+                        moved
+                        and moved[-1] != f["url"]
+                        and not self.rows("SELECT 1 FROM feeds WHERE url=?", (moved[-1],))
+                    ):
                         safe_url(moved[-1])
                         reader.change_feed_url(f["url"], moved[-1])
                         with self.db:
@@ -1434,6 +1444,10 @@ class Core:
                     AND json_extract(j.payload,'$.feed_id')=f.id)
             """):
                 self._enqueue("backfill", {"feed_id": feed["id"]})
+            # Keeping feeds current comes first: after a large import thousands of
+            # extractions are queued, and new posts must not wait behind them.
+            # Archive pages are throttled to one a minute, so they cannot starve
+            # the extraction backlog.
             jobs = self.rows(
                 """
                 SELECT * FROM jobs j WHERE status='queued' AND (
@@ -1442,7 +1456,8 @@ class Core:
                         AND coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='archive_next_request'),'')<=?
                         AND EXISTS(SELECT 1 FROM feeds f WHERE f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0)
                     )
-                ) ORDER BY updated,created LIMIT 1
+                ) ORDER BY CASE kind WHEN 'extract' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1 ELSE 0 END,
+                  updated,created LIMIT 1
             """,
                 (now(), now()),
             )
@@ -1520,11 +1535,20 @@ class Core:
         count = 0
 
         # Validate every URL before opening the write transaction (DNS can be
-        # slow). Folder/name/depth errors below still roll back the whole import.
-        for child in root.iter():
-            for key, value in child.attrib.items():
-                if key.lower() == "xmlurl":
-                    safe_url(value)
+        # slow, so resolve concurrently). Folder/name/depth errors below still
+        # roll back the whole import. A host that no longer resolves is kept:
+        # its refresh job records the failure on the feed instead of losing a
+        # large export to one dead blog.
+        urls = {
+            value for child in root.iter() for key, value in child.attrib.items() if key.lower() == "xmlurl"
+        }
+        unresolved = 0
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            for future in [pool.submit(safe_url, url) for url in urls]:
+                try:
+                    future.result()
+                except UnresolvedHost:
+                    unresolved += 1
 
         def walk(node, folder="inbox", depth=0):
             nonlocal count
@@ -1555,7 +1579,7 @@ class Core:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             walk(root)
-        return {"imported": count}
+        return {"imported": count, "unresolved": unresolved}
 
     def export_starred(self):
         return {

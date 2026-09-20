@@ -64,6 +64,43 @@ def test_mixed_dns_answers_fail_before_any_connection(monkeypatch, ip):
         network.PinnedBackend().connect_tcp("mixed.test", 80)
 
 
+@pytest.mark.parametrize("transport", ["httpcore", "urllib3"])
+def test_dead_host_with_many_addresses_shares_one_connect_timeout(monkeypatch, transport):
+    monkeypatch.delenv("FEEDELIO_ALLOW_PRIVATE_NETWORK", raising=False)
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *a, **k: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (f"8.8.8.{n}", 443)) for n in range(1, 13)
+        ],
+    )
+    budgets = []
+
+    def connect(*args, **kwargs):
+        timeout = args[2] if transport == "httpcore" else args[1]
+        budgets.append(timeout)
+        raise socket.timeout("Connection timed out")
+
+    if transport == "httpcore":
+
+        def connect_tcp(self, host, port, timeout, *args):
+            connect(host, port, timeout)
+            raise httpcore.ConnectTimeout("Connection timed out")
+
+        monkeypatch.setattr(httpcore.SyncBackend, "connect_tcp", connect_tcp)
+        with pytest.raises(httpcore.ConnectTimeout):
+            network.PinnedBackend().connect_tcp("dead.test", 443, timeout=1)
+    else:
+        monkeypatch.setattr(network, "create_connection", connect)
+        connection = network.PinnedHTTPSConnection("dead.test", 443, timeout=1)
+        with pytest.raises(network.ConnectTimeoutError):
+            connection._new_conn()
+    # Each attempt gets what is left of the single budget, never a fresh timeout,
+    # and the loop must never go through all twelve addresses at full timeout.
+    assert budgets[0] <= 1 and all(later < earlier for earlier, later in zip(budgets, budgets[1:]))
+    assert sum(budgets) < 12
+
+
 def test_proxy_requires_explicit_network_opt_in(monkeypatch):
     monkeypatch.delenv("FEEDELIO_ALLOW_PRIVATE_NETWORK", raising=False)
     with pytest.raises(ValueError, match="trusted proxy"):

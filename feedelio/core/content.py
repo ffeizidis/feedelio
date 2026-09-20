@@ -5,6 +5,7 @@ import html
 import ipaddress
 import json
 import os
+import socket
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -17,12 +18,19 @@ from bs4 import BeautifulSoup
 from .network import addresses, http_client
 
 
+class UnresolvedHost(ValueError):
+    """The host name does not resolve right now; fetching would fail, not leak."""
+
+
 def safe_url(url: str) -> str:
     parts = urlsplit(url.strip())
     if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
         raise ValueError("Use an http(s) URL without embedded credentials.")
     if os.getenv("FEEDELIO_ALLOW_PRIVATE_NETWORK") != "1":
-        addresses(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
+        try:
+            addresses(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
+        except socket.gaierror as exc:
+            raise UnresolvedHost(f"The host {parts.hostname} could not be resolved.") from exc
     return urlunsplit(parts)
 
 

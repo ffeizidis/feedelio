@@ -8,6 +8,7 @@ upgrading these version-pinned connection hooks.
 import ipaddress
 import os
 import socket
+import time
 
 import httpcore
 import httpx
@@ -32,6 +33,22 @@ def addresses(host, port):
     return ips
 
 
+def attempts(host, port, timeout):
+    """Yield (ip, timeout) pairs sharing one connect budget across all addresses.
+
+    A dead host behind a dozen A records would otherwise cost a full timeout
+    per address and stall the worker for minutes.
+    """
+    if not isinstance(timeout, (int, float)):  # None, or urllib3's default sentinel
+        timeout = None
+    deadline = None if timeout is None else time.monotonic() + timeout
+    for ip in addresses(host, port):
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            raise socket.timeout("Connection timed out")
+        yield ip, remaining
+
+
 def check_proxy(proxy):
     if proxy and os.getenv("FEEDELIO_ALLOW_PRIVATE_NETWORK") != "1":
         raise ValueError(
@@ -42,11 +59,14 @@ def check_proxy(proxy):
 class PinnedBackend(httpcore.SyncBackend):
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
         error = None
-        for ip in addresses(host, port):
-            try:
-                return super().connect_tcp(ip, port, timeout, local_address, socket_options)
-            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
-                error = exc
+        try:
+            for ip, remaining in attempts(host, port, timeout):
+                try:
+                    return super().connect_tcp(ip, port, remaining, local_address, socket_options)
+                except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                    error = exc
+        except socket.timeout as exc:
+            raise httpcore.ConnectTimeout(str(exc)) from exc
         raise error
 
 
@@ -62,11 +82,11 @@ class PinnedConnection:
     def _new_conn(self):
         try:
             error = None
-            for ip in addresses(self._dns_host, self.port):
+            for ip, remaining in attempts(self._dns_host, self.port, self.timeout):
                 try:
                     return create_connection(
                         (ip, self.port),
-                        self.timeout,
+                        remaining,
                         source_address=self.source_address,
                         socket_options=self.socket_options,
                     )

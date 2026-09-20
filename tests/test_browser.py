@@ -128,20 +128,28 @@ def test_desktop_reading_workflow(core, site, web_server):
             page.locator("option", has_text="Computing").first.get_attribute("value")
         )
         page.get_by_role("button", name="Create folder").click()
+        # Folders start collapsed; the same name is fine under a different parent.
+        expect(page.locator(".folder-group-heading", has_text="Compilers")).to_have_count(0)
+        page.get_by_role("dialog", name="Manage library").get_by_role(
+            "button", name="Expand Computing"
+        ).click()
+        page.get_by_role("button", name="+ New folder", exact=True).click()
+        page.get_by_role("textbox", name="Folder name").fill("Engineering")
+        page.get_by_role("combobox", name="Put folder under").select_option(label="Computing")
+        page.get_by_role("button", name="Create folder").click()
+        expect(page.locator(".folder-group-heading", has_text="Engineering")).to_have_count(2)
         nested = page.locator(".folder-group", has_text="Computing").locator(
             ".folder-nested .folder-group-heading"
         )
-        expect(nested).to_have_count(1)
-        expect(nested).to_contain_text("Compilers")
+        expect(nested).to_have_count(2)
+        expect(nested.first).to_contain_text("Compilers")
         # Folders nest by drag and drop too, and drop back to the top level.
-        page.locator(".folder-group-heading", has_text="Engineering").drag_to(
-            page.locator(".folder-group-heading", has_text="Computing")
+        page.locator(".folder-group-heading", has_text="Compilers").drag_to(
+            nested.filter(has_text="Engineering")
         )
-        expect(
-            page.locator(".folder-group", has_text="Computing").locator(
-                ".folder-nested .folder-group-heading"
-            )
-        ).to_have_count(2)
+        expect(nested).to_have_count(1)
+        nested.get_by_role("button", name="Expand Engineering").click()
+        expect(nested).to_have_count(2)
         page.locator(".folder-group-heading", has_text="Compilers").drag_to(page.locator(".folder-drop-hint"))
         expect(
             page.locator(".folder-group", has_text="Computing").locator(

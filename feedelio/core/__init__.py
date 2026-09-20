@@ -340,8 +340,11 @@ class Core:
             if id and parent_id in self.descendants(id):
                 raise ValueError("A folder cannot contain itself or its ancestors.")
             id = id or uid()
-            if self.rows("SELECT 1 FROM folders WHERE name=? COLLATE NOCASE AND id!=?", (name.strip(), id)):
-                raise ValueError(f"A folder named {name.strip()} already exists.")
+            if self.rows(
+                "SELECT 1 FROM folders WHERE name=? COLLATE NOCASE AND id!=? AND parent_id IS ?",
+                (name.strip(), id, parent_id or None),
+            ):
+                raise ValueError(f"A folder named {name.strip()} already exists here.")
             self.db.execute(
                 "INSERT INTO folders VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,parent_id=excluded.parent_id",
                 (id, name.strip(), parent_id),
@@ -1645,10 +1648,11 @@ class Core:
                         count += 1
                     else:
                         parent = None if folder == "inbox" else folder
-                        # Folder names are unique, so an outline reuses a same-named folder
-                        # wherever it already sits rather than creating a twin.
+                        # Sibling names are unique: an outline reuses a same-named folder
+                        # under the same parent rather than creating a twin.
                         matches = self.rows(
-                            "SELECT id FROM folders WHERE name=? COLLATE NOCASE", (name.strip(),)
+                            "SELECT id FROM folders WHERE name=? COLLATE NOCASE AND parent_id IS ?",
+                            (name.strip(), parent),
                         )
                         if not name.strip():
                             raise ValueError("A folder needs a name.")

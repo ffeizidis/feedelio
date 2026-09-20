@@ -414,3 +414,7 @@ def test_youtube_channel_archive_lists_the_video_grid_and_reads_watch_pages(core
     assert states[-1]["result"]["articles"] == 2
     assert states[-1]["result"]["message"] == "All exposed archive pages processed."
     assert not core.rows("SELECT 1 FROM jobs WHERE kind='extract' AND status='queued'")
+    # The library's job summary counts the archive's contribution.
+    queue = core.overview()["queue"]
+    assert queue["backfill"]["waiting"] == 0 and queue["backfill"]["done"] == 1
+    assert queue["backfill"]["articles"] == 2 and "refresh" in queue

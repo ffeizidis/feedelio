@@ -829,6 +829,21 @@ dialog::backdrop {
 .stat-cards span {
   font-size: 13px;
 }
+.queue-table > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  font-size: 13px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.queue-table > div > span:last-child {
+  text-align: right;
+  color: var(--muted);
+}
+.queue-table .muted {
+  margin: 12px 0 20px;
+}
 .habit-table > div {
   display: flex;
   align-items: center;

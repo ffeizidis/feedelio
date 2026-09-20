@@ -306,6 +306,26 @@ def test_refresh_jobs_run_before_an_older_extraction_backlog(core, site):
     assert ran[0]["id"] == refresh and ran[0]["kind"] == "refresh"
 
 
+def test_manual_refresh_jumps_a_queued_library_refresh(core, site):
+    first = core.subscribe(site[0] + "/rss")["id"]
+    second = core.subscribe(site[0] + "/json")["id"]
+    core.db.execute("UPDATE jobs SET status='done'")
+    core.db.commit()
+    core.refresh_all()  # Queues first, then second, in library order.
+    queued = core.enqueue("refresh", {"feed_id": second})  # A scheduled duplicate waits its turn.
+    manual = core.enqueue("refresh", {"feed_id": second, "manual": True})
+    assert queued == manual  # Promoted, not duplicated.
+    core.tick()
+    ran = core.rows("SELECT payload FROM jobs WHERE status='done' ORDER BY updated DESC LIMIT 1")
+    assert ran[0]["payload"] == {"feed_id": second, "manual": True}
+    core.tick()
+    assert core.rows("SELECT payload FROM jobs WHERE status='done' ORDER BY updated DESC LIMIT 1")[0][
+        "payload"
+    ] == {"feed_id": first}
+    with pytest.raises(ValueError, match="Unknown refresh option"):
+        core.enqueue("refresh", {"feed_id": first, "url": "x"})
+
+
 def test_rate_limited_extraction_is_retried_later(core, site):
     _, routes, _ = site
     subscription(core, site)

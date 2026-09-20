@@ -251,7 +251,10 @@ function UpdateNow({ data, act, feedId, checked }) {
       onClick={() =>
         act(
           "enqueue",
-          { kind: "refresh", payload: feedId ? { feed_id: feedId } : {} },
+          {
+            kind: "refresh",
+            payload: feedId ? { feed_id: feedId, manual: true } : {},
+          },
           "Update queued",
         )
       }
@@ -694,7 +697,9 @@ function App() {
           "enqueue",
           {
             kind: "refresh",
-            payload: scope.feed_id ? { feed_id: scope.feed_id } : {},
+            payload: scope.feed_id
+              ? { feed_id: scope.feed_id, manual: true }
+              : {},
           },
           "Update queued",
         );

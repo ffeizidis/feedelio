@@ -109,6 +109,20 @@ def parse_feed(url, data, headers):
     return feed
 
 
+def scraped_date(item):
+    """A listing's own date for an item (a <time>, a data-date or an ISO date in the text), else None."""
+    stamp = item.find("time", attrs={"datetime": True})
+    candidates = [stamp["datetime"] if stamp else "", item.get("data-date") or ""]
+    candidates += regex.findall(r"\b\d{4}-\d{2}-\d{2}\b", item.get_text(" ", strip=True))
+    for value in candidates:
+        try:
+            when = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        return (when if when.tzinfo else when.replace(tzinfo=timezone.utc)).isoformat()
+    return None
+
+
 def feed_guesses(page_url, page):
     """Same-site feed URLs worth one request each: page links, robots.txt, then convention."""
     host = urlsplit(page_url).hostname
@@ -1162,7 +1176,7 @@ class Core:
         if not items:
             raise ValueError("Site scraper matched no items; check the CSS selector.")
         count = 0
-        for item in items[:500]:
+        for item in items[:2000]:
             link = item.select_one(feed["options"].get("scrape_link") or "a[href]")
             if not link and item.name == "a":
                 link = item
@@ -1170,7 +1184,13 @@ class Core:
                 article_url = urljoin(url, link["href"])
                 before = self.db.total_changes
                 id = self.ingest(
-                    feed["id"], article_url, link.get_text(" ", strip=True), article_url, str(item), read=read
+                    feed["id"],
+                    article_url,
+                    link.get_text(" ", strip=True),
+                    article_url,
+                    str(item),
+                    published=scraped_date(item),
+                    read=read,
                 )
                 if self.db.total_changes > before:
                     count += 1

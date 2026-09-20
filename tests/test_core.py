@@ -406,11 +406,14 @@ def test_site_scraper_and_feed_backfill(core, site):
     routes["/no-feed"] = (
         200,
         {"Content-Type": "text/html"},
-        '<html><article class="story"><a href="/older">An older story</a></article></html>',
+        '<html><article class="story"><a href="/older">An older story</a></article>'
+        '<article class="story"><span>2019-05-04</span> <a href="/dated">A dated story</a></article></html>',
     )
     id = core.subscribe(base + "/no-feed", options={"scrape_selector": "article.story"})["id"]
     core.refresh(id)
     assert core.articles()["items"][0]["url"] == base + "/older"
+    dated = core.articles()["items"][1]  # Listing dates order the archive, not the scrape time.
+    assert dated["url"] == base + "/dated" and dated["published"].startswith("2019-05-04")
     routes["/archive"] = (
         200,
         {"Content-Type": "application/feed+json"},
@@ -426,7 +429,7 @@ def test_site_scraper_and_feed_backfill(core, site):
     state = core.backfill(id, base + "/archive")
     assert state["pages"] == 1
     assert core.backfill(id, state=state)["pages"] == 2
-    assert core.articles()["total"] == 3
+    assert core.articles()["total"] == 4
     assert len(core.feeds()) == 1
 
 

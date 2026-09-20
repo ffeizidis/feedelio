@@ -1821,7 +1821,7 @@ mark {
   color: var(--dim);
 }
 .feed-updated.healthy {
-  color: var(--green);
+  color: var(--healthy);
 }
 .feed-updated.stale,
 .feed-updated.partial {

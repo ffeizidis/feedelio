@@ -1448,7 +1448,13 @@ function App() {
                   <details className="article-details">
                     <summary>
                       {a.duration
-                        ? `${clock(a.duration)} video`
+                        ? `${clock(a.duration)} ${
+                            (a.enclosures || []).some((e) =>
+                              (e.type || "").startsWith("audio/"),
+                            )
+                              ? "listen"
+                              : "video"
+                          }`
                         : `${a.reading_minutes} min read · ${a.words.toLocaleString()} words`}
                     </summary>
                     {a.author && <p>By {a.author}</p>}

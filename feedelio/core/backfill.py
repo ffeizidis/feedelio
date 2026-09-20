@@ -130,12 +130,12 @@ def archive_url(source, offset):
     )
 
 
-def feed_page(data, url, headers):
+def feed_page(data, url, headers, durations=None):
     if data.lstrip().startswith(b"{"):
         parser = JSONFeedParser()
         next_url = json.loads(data).get("next_url")
     else:
-        parser = ExtendedFeedparser()
+        parser = ExtendedFeedparser(durations)
         soup = BeautifulSoup(data, "xml")
         # RFC 5005 archives use prev-archive, paginated feeds use next.
         link = soup.find("link", rel="next") or soup.find("link", rel="prev-archive")

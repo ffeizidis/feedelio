@@ -14,3 +14,4 @@ services:
     stop_grace_period: 60s
 volumes:
   feedelio-data:
+    name: feedelio-data # Same volume as the plain docker run instructions.

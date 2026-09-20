@@ -11,6 +11,7 @@ from feedelio.core.content import embed_url, safe_url, sanitize
 
 def subscription(core, site, path="/rss"):
     base, _, _ = site
+    core.save_settings({"new_feed_read": False})  # These tests exercise the unread workflow.
     id = core.subscribe(base + path)["id"]
     core.refresh(id)
     return id

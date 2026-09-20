@@ -8,18 +8,18 @@ def test_api_state_and_exports(core, site):
         result = client.post("/api/actions/subscribe", json={"payload": {"url": site[0] + "/rss"}})
         assert result.status_code == 200, result.text
         core.refresh(result.json()["id"])
-        assert client.get("/api/overview").json()["counts"]["unread"] == 1
+        assert client.get("/api/overview").json()["counts"]["unread"] == 0  # New feeds start read.
         articles = client.get("/api/articles?q=independent").json()
         assert articles["total"] == 1
         id = articles["items"][0]["id"]
         assert client.get("/api/articles/" + id).status_code == 200
         assert (
             client.post(
-                "/api/actions/change_articles", json={"payload": {"ids": [id], "read": True}}
+                "/api/actions/change_articles", json={"payload": {"ids": [id], "read": False}}
             ).status_code
             == 200
         )
-        assert client.get("/api/articles?unread=true").json()["total"] == 0
+        assert client.get("/api/articles?unread=true").json()["total"] == 1
         assert client.get("/api/export/opml").headers["content-type"].startswith("application/xml")
         assert client.get("/api/export/json").json()["format"] == "feedelio"
         assert client.get("/api/articles/" + id + "/obsidian").status_code == 200

@@ -80,6 +80,7 @@ DEFAULTS = dict(
     wordmark="script",
     reduce_motion=False,
     open_titles_in="reader",
+    new_feed_read=True,
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 
@@ -228,7 +229,7 @@ class Core:
         }.items():
             if merged[key] not in choices:
                 raise ValueError(f"Invalid {key}.")
-        for key in ("feed_colours", "reduce_motion"):
+        for key in ("feed_colours", "reduce_motion", "new_feed_read"):
             if not isinstance(merged[key], bool):
                 raise ValueError(f"{key} must be a boolean.")
         if merged["invidious"]:
@@ -769,6 +770,7 @@ class Core:
         enclosures=None,
         transcript="",
         tags=None,
+        read=False,
     ):
         # Publisher links reach window.open and <a href>; keep only web URLs.
         url = clean_url(url) if urlsplit(url).scheme in ("http", "https") else ""
@@ -840,7 +842,7 @@ class Core:
             transcript=transcript,
             enclosures=enclosures or [],
             tags=tags or [],
-            read=0,
+            read=int(read),
             starred=0,
             deleted=0,
             duplicate=0,
@@ -926,10 +928,14 @@ class Core:
         f = self.one("SELECT * FROM feeds WHERE id=? AND deleted=0", (feed_id,))
         if not f["url"].startswith("http"):
             return {"new": 0}
+        # A new subscription starts read: its existing posts are history, not a backlog.
+        read = self.settings()["new_feed_read"] and not self.rows(
+            "SELECT 1 FROM articles WHERE feed_id=? LIMIT 1", (feed_id,)
+        )
         try:
             options = request_options(f)
             if options.get("scrape_selector"):
-                new = self.scrape(f)
+                new = self.scrape(f, read)
             else:
                 moved = []
                 with self.reader(options, moved) as reader:
@@ -988,6 +994,7 @@ class Core:
                             (entry.published or entry.updated or entry.added).isoformat(),
                             [dataclasses.asdict(e) for e in entry.enclosures],
                             transcript=transcript,
+                            read=read,
                         )
                         if self.db.total_changes > before:
                             new += 1
@@ -1044,7 +1051,7 @@ class Core:
                 )
             raise
 
-    def scrape(self, feed):
+    def scrape(self, feed, read=False):
         data, url, _ = fetch(feed["url"], request_options(feed))
         soup = BeautifulSoup(data, "html.parser")
         items = soup.select(feed["options"]["scrape_selector"])
@@ -1059,7 +1066,7 @@ class Core:
                 article_url = urljoin(url, link["href"])
                 before = self.db.total_changes
                 id = self.ingest(
-                    feed["id"], article_url, link.get_text(" ", strip=True), article_url, str(item)
+                    feed["id"], article_url, link.get_text(" ", strip=True), article_url, str(item), read=read
                 )
                 if self.db.total_changes > before:
                     count += 1
@@ -1177,6 +1184,7 @@ class Core:
         state = archives.initial(f, url) | (state or {})
         state["pending"] = list(state.get("pending", []))
         options = request_options(f)
+        read = self.settings()["new_feed_read"]
         # Skip entries already supplied by the live feed without fetching again.
         while state["pending"]:
             post = state["pending"][0]
@@ -1221,6 +1229,7 @@ class Core:
                         + (["archive-preview"] if preview else [])
                     )
                 ),
+                read=read,
             )
             if id:
                 with self.db:
@@ -1233,7 +1242,14 @@ class Core:
             return state
         if url in state["visited"]:
             raise ValueError("Archive pagination repeats a page; stopped to avoid a request loop.")
-        data, final, headers = self._archive_fetch(url, options)
+        try:
+            data, final, headers = self._archive_fetch(url, options)
+        except requests.HTTPError as exc:
+            if state["pages"] == 0 or exc.response.status_code not in (404, 410):
+                raise
+            # Synthesised (WordPress ?paged=) and stale next links end with a 404.
+            state.update(next_url=None, message="All exposed archive pages processed.")
+            return state
         if state["mode"] == "substack":
             pending, next_url = archives.substack_page(data, final, state["offset"])
             if pending and all(p["guid"] in state.get("seen_posts", []) for p in pending):
@@ -1262,6 +1278,7 @@ class Core:
                     ", ".join(a.name or "" for a in e.authors),
                     (e.published or e.updated).isoformat() if (e.published or e.updated) else None,
                     [dataclasses.asdict(x) for x in e.enclosures],
+                    read=read,
                 )
                 state["articles"] += (
                     self.one("SELECT count(*) n FROM articles WHERE feed_id=?", (feed_id,))["n"] - before

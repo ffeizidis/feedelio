@@ -6,7 +6,7 @@ archive listing; it is not an RSS pagination endpoint or a paywall bypass.
 
 import io
 import json
-from urllib.parse import urlencode, urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 from reader._parser.jsonfeed import JSONFeedParser
@@ -49,7 +49,24 @@ def feed_page(data, url, headers):
         link = soup.find("link", rel="next") or soup.find("link", rel="prev-archive")
         next_url = link.get("href") if link else None
     _, entries = parser(url, io.BytesIO(data), headers)
-    return list(entries), urljoin(url, next_url) if next_url else None
+    entries = list(entries)
+    if not next_url and entries and isinstance(parser, ExtendedFeedparser):
+        next_url = wordpress_page(soup, url)
+    return entries, urljoin(url, next_url) if next_url else None
+
+
+def wordpress_page(soup, url):
+    """WordPress paginates feeds with ?paged=N but never advertises it; the last page is a 404."""
+    generator = soup.find("generator")
+    if not generator or "wordpress" not in generator.get_text().lower():
+        return None
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    try:
+        query["paged"] = str(int(query.get("paged", "1")) + 1)
+    except ValueError:
+        return None
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def substack_page(data, url, offset):

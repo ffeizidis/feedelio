@@ -1,6 +1,6 @@
 # Feedelio
 
-A private, single-user, keyboard-first desktop RSS reader. Three persistent panes hold folders/subscriptions, the article list, and the reader. Drag either boundary to resize. Only article titles open stories; read circles and stars have independent actions, and feed labels open the feed's settings. Lists and article bodies scroll independently. No mobile layout or multi-user accounts.
+A private, single-user, keyboard-first desktop RSS reader. Three persistent panes hold folders/subscriptions, the article list, and the reader. Drag either boundary to resize. Only article titles open stories; read circles, stars, and feed labels have independent actions. Lists and article bodies scroll independently. No mobile layout or multi-user accounts.
 
 ## Run with Docker
 
@@ -115,7 +115,7 @@ All requested areas have an implementation. Integrations that depend on a publis
 | ? | Shortcut guide |
 | Escape | Close search, sheet, or selected article |
 
-A feed label in the article list opens that feed's settings. The open reader and the library each take a browser history entry, so Back — keyboard, toolbar or a mouse side button — closes them instead of leaving Feedelio. Focus either pane boundary and use Left/Right (20 px steps), Home or End to resize without a mouse. Widths and appearance preferences are saved in the library. **Manage library → Appearance** controls themes, accents, stable feed colours, counts/dots, wordmark, motion, list mode, reading fonts and density, and whether title clicks open the reader or original page. The default is dark, blue, 38px titles-only rows, and 17px Georgia. Existing preferences are preserved. Fonts are served locally, not from Google.
+When a feed is open, its title above the article list opens that feed's settings. The open reader and the library each take a browser history entry, so Back — keyboard, toolbar or a mouse side button — closes them instead of leaving Feedelio. Focus either pane boundary and use Left/Right (20 px steps), Home or End to resize without a mouse. Widths and appearance preferences are saved in the library. **Manage library → Appearance** controls themes, accents, stable feed colours, counts/dots, wordmark, motion, list mode, reading fonts and density, and whether title clicks open the reader or original page. The default is dark, blue, 38px titles-only rows, and 17px Georgia. Existing preferences are preserved. Fonts are served locally, not from Google.
 
 Shortcuts pause while typing or using a dialog. At 200% zoom the fixed desktop shell may scroll horizontally; it never changes into a mobile layout.
 

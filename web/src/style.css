@@ -1165,6 +1165,20 @@ dialog::backdrop {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.heading-link {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  padding: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.heading-link:hover {
+  color: var(--green);
+}
 .stream-meta {
   margin-top: 11px;
   display: flex;

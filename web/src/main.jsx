@@ -915,6 +915,20 @@ function App() {
                 esc to close
               </button>
             </div>
+          ) : activeFeed ? (
+            <h1>
+              <button
+                className="heading-link"
+                title="Feed settings"
+                aria-label={"Manage feed: " + activeFeed.title}
+                onClick={() => {
+                  setManageFeed(activeFeed.id);
+                  setModal("feeds");
+                }}
+              >
+                {heading}
+              </button>
+            </h1>
           ) : (
             <h1>{heading}</h1>
           )}
@@ -1067,11 +1081,7 @@ function App() {
                 {!scope.feed_id && (
                   <button
                     className="row-feed"
-                    aria-label={"Manage feed: " + item.feed_title}
-                    onClick={() => {
-                      setManageFeed(item.feed_id);
-                      setModal("feeds");
-                    }}
+                    onClick={() => stream("all", { feed_id: item.feed_id })}
                   >
                     {item.feed_title}
                   </button>

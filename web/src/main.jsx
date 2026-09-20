@@ -533,8 +533,9 @@ function App() {
   }, [tabTitle, data]);
   const items = articles.data?.items || [],
     a = article.data;
-  // An article opened by its address shows within its feed's stream.
-  const placed = useRef(!start.selected);
+  // An article opened by its address shows within its feed's stream; one
+  // resumed after a policy reload stays in the stream it was read from.
+  const placed = useRef(!start.selected || !!start.view);
   useEffect(() => {
     if (!placed.current && a && a.id === start.selected) {
       placed.current = true;

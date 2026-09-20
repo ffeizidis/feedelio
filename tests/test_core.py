@@ -98,8 +98,15 @@ def test_folder_tree_move_counts_and_cycle(core, site):
         core.save_folder("Technology", child, parent)
     with pytest.raises(ValueError):
         core.edit_feed(id, folder_id="missing")
+    # Deleting a folder lifts its subfolders, unless the parent has one by that name.
+    twin = core.save_folder("Engineering")["id"]
+    with pytest.raises(ValueError, match="Move or rename"):
+        core.delete_folder(parent)
+    core.delete_folder(twin)
+    core.save_settings({"collapsed_folders": [child]})
     core.delete_folder(child)
     assert core.feeds()[0]["folder_id"] == "inbox"
+    assert core.settings()["collapsed_folders"] == []
     # Sibling folder names are unique, case-insensitively; the same name may recur elsewhere.
     with pytest.raises(ValueError, match="already exists"):
         core.save_folder("technology")
@@ -170,8 +177,17 @@ def test_episodes_sharing_the_show_page_link_stay_separate(core, site):
     first = core.ingest(id, "ep-1", "Episode one", home, "<p>Notes one</p>", enclosures=mp3(1))
     second = core.ingest(id, "ep-2", "Episode two", home, "<p>Notes two</p>", enclosures=mp3(2))
     assert first != second
+    # A refresh sees every episode again; each must find its own article.
+    third = core.ingest(id, "ep-3", "Episode three", home, "<p>Notes three</p>", enclosures=mp3(3))
+    for n, expected in ((1, first), (2, second), (3, third)):
+        ep = core.ingest(id, f"ep-{n}", f"Episode {n}", home, f"<p>Notes {n}</p>", enclosures=mp3(n))
+        assert ep == expected
     # The same episode reissued with a new id but the same audio is still one article.
     assert core.ingest(id, "ep-2-v2", "Episode two", home, "<p>Notes two</p>", enclosures=mp3(2)) == second
+    # Two title-only items (a saved page, a linkless entry) are not the same article.
+    assert core.ingest(id, "https://one.example/", "Dashboard", "https://one.example/") != core.ingest(
+        id, "https://two.example/", "Dashboard", "https://two.example/"
+    )
     # A plain article that only moved to a new id keeps matching by link.
     post = core.ingest(id, "post-a", "A longer article title", site[0] + "/post", "<p>Body</p>")
     assert core.ingest(id, "post-b", "A longer article title", site[0] + "/post", "<p>Edited</p>") == post
@@ -270,6 +286,19 @@ def test_retention_protects_unread_saved_archive_and_tombstones(core, site):
     id = subscription(core, site)
     core.save_settings({"retention_days": 90})  # Retention is off by default.
     a = core.articles()["items"][0]
+    # A downloaded episode goes with its article.
+    while core.tick():  # The subscription's own refresh would reset the enclosures.
+        pass
+    with core.db:
+        core.db.execute(
+            "UPDATE articles SET enclosures=? WHERE id=?",
+            (json.dumps([{"href": site[0] + "/audio.mp3", "type": "audio/mpeg"}]), a["id"]),
+        )
+    job = core.enqueue("download", {"article_id": a["id"], "url": site[0] + "/audio.mp3"})
+    site[1]["/audio.mp3"] = (200, {"Content-Type": "audio/mpeg"}, b"ID3test")
+    for _ in range(10):
+        core.tick()
+    assert core.download_path(job["id"]).exists()
     old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
     with core.db:
         core.db.execute("UPDATE articles SET added=?", (old,))
@@ -281,8 +310,21 @@ def test_retention_protects_unread_saved_archive_and_tombstones(core, site):
     assert core.purge()["purged"] == 0
     core.edit_feed(id, options={"archive": False})
     assert core.purge()["purged"] == 1
+    assert not (core.root / "downloads" / job["id"]).exists()
+    assert not [d for d in core.overview()["downloads"] if d["status"] == "done"]
     core.refresh(id)
     assert core.articles()["total"] == 0
+
+
+def test_saved_pages_sharing_a_title_stay_separate(core, site):
+    entries = [
+        {"url": f"https://{host}.example/", "title": "Dashboard", "hasBeenRead": read, "lastUpdateTime": 1}
+        for host, read in (("one", False), ("two", True))
+    ]
+    core.chrome_sync(entries)
+    items = core.articles(deduplicate=False)["items"]
+    assert sorted(a["url"] for a in items) == ["https://one.example/", "https://two.example/"]
+    assert [a["hasBeenRead"] for a in core.chrome_sync(entries)["entries"]] == [False, True]
 
 
 def test_chrome_read_state_conflicts_and_undo(core, site):

@@ -160,7 +160,8 @@ def retry_at(exc, attempts):
             )
         except (ValueError, TypeError, OverflowError):
             pass
-    return datetime.now(timezone.utc) + timedelta(seconds=delay)
+    # A publisher's Retry-After is honoured up to a day; beyond that it parks a feed for good.
+    return datetime.now(timezone.utc) + timedelta(seconds=min(delay, 86400))
 
 
 class GuardAdapter(PinnedAdapter):
@@ -201,7 +202,11 @@ class Core:
             self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
             self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
             if "duration" not in {r[1] for r in self.db.execute("PRAGMA table_info(articles)")}:
-                self.db.execute("ALTER TABLE articles ADD COLUMN duration INTEGER NOT NULL DEFAULT 0")
+                try:  # The API and the worker start together; whoever is second finds it done.
+                    self.db.execute("ALTER TABLE articles ADD COLUMN duration INTEGER NOT NULL DEFAULT 0")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):
+                        raise
             # Stable subscription colours, including deleted feeds so restoring or
             # removing subscriptions never shifts the remaining palette.
             self.db.execute("""UPDATE feeds SET options=json_set(options,'$.hue',
@@ -373,9 +378,22 @@ class Core:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             folder = self.one("SELECT * FROM folders WHERE id=?", (id,))
+            clash = self.rows(
+                """SELECT c.name FROM folders c JOIN folders s ON s.name=c.name COLLATE NOCASE
+                  AND s.parent_id IS ? AND s.id!=? WHERE c.parent_id=?""",
+                (folder["parent_id"], id, id),
+            )
+            if clash:
+                raise ValueError(
+                    f"Move or rename the subfolder {clash[0]['name']} first: its parent has one already."
+                )
             self.db.execute("UPDATE feeds SET folder_id=? WHERE folder_id=?", ("inbox", id))
             self.db.execute("UPDATE folders SET parent_id=? WHERE parent_id=?", (folder["parent_id"], id))
             self.db.execute("DELETE FROM folders WHERE id=?", (id,))
+            collapsed = [c for c in self.settings()["collapsed_folders"] if c != id]
+            self.db.execute(
+                "INSERT OR REPLACE INTO settings VALUES('collapsed_folders',?)", (json.dumps(collapsed),)
+            )
         return {"ok": True}
 
     def feeds(self):
@@ -903,9 +921,14 @@ class Core:
         guid = guid or url or digest
         if self.rows("SELECT 1 FROM tombstones WHERE feed_id=? AND guid=?", (feed_id, guid)):
             return None
+        # The same item under its id first, then the same content under a new id,
+        # then the same link. A title alone is not content: linkless entries and
+        # saved pages that merely share a <title> stay separate.
         existing = self.rows(
-            "SELECT * FROM articles WHERE feed_id=? AND (guid=? OR (url=? AND url!='') OR fingerprint=?) LIMIT 1",
-            (feed_id, guid, url, digest),
+            """SELECT * FROM articles WHERE feed_id=?
+              AND (guid=? OR (fingerprint=? AND text!='') OR (url=? AND url!=''))
+              ORDER BY (guid=?) DESC, (fingerprint=?) DESC LIMIT 1""",
+            (feed_id, guid, digest, url, guid, digest),
         )
         # Some podcast feeds link every episode to the show's home page; two
         # episodes with their own ids and different audio are not one article.
@@ -1559,7 +1582,7 @@ class Core:
                 "UPDATE jobs SET status=CASE WHEN status='paused' THEN status ELSE ? END,updated=?,result=?,error=? WHERE id=?",
                 (status, now(), json.dumps(state), error, job["id"]),
             )
-            self._pace_host(job, state["not_before"])
+            self._pace_host(job | {"result": state}, state["not_before"])
 
     def _archive_hosts(self):
         """Sites with an archive request still pending their minute, past deadlines dropped."""
@@ -1607,6 +1630,14 @@ class Core:
             self.db.executemany(
                 "INSERT OR IGNORE INTO tombstones VALUES (?,?)", [(f["id"], a["guid"]) for a in doomed]
             )
+            # An episode's file goes with its article, or retention would never free the disk.
+            for a in doomed:
+                for j in self.rows(
+                    "SELECT id FROM jobs WHERE kind='download' AND status='done' AND json_extract(payload,'$.article_id')=?",
+                    (a["id"],),
+                ):
+                    (self.root / "downloads" / j["id"]).unlink(missing_ok=True)
+                    self.db.execute("UPDATE jobs SET status='removed' WHERE id=?", (j["id"],))
             self.db.executemany("DELETE FROM articles WHERE id=?", [(a["id"],) for a in doomed])
         # Public delete_entry only accepts manually added entries. This is
         # the same pinned internal primitive reader's retention plugins use.
@@ -1638,7 +1669,7 @@ class Core:
             self.db.execute("BEGIN IMMEDIATE")
             # Seed existing subscriptions too, once, after a successful refresh.
             for feed in self.rows("""
-                SELECT id FROM feeds f WHERE deleted=0 AND checked IS NOT NULL
+                SELECT id FROM feeds f WHERE deleted=0 AND checked IS NOT NULL AND error IS NULL
                 AND url LIKE 'http%' AND coalesce(json_extract(options,'$.scrape_selector'),'')=''
                 AND NOT EXISTS (SELECT 1 FROM jobs j WHERE kind='backfill'
                     AND json_extract(j.payload,'$.feed_id')=f.id)
@@ -1901,7 +1932,10 @@ class Core:
         try:
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
-                if self.rows("SELECT id FROM feeds LIMIT 1"):
+                # The extension creates its feed the moment it is pointed here; empty, it is not a library.
+                if self.rows(
+                    "SELECT id FROM feeds WHERE id!='chrome' OR EXISTS (SELECT 1 FROM articles WHERE feed_id='chrome') LIMIT 1"
+                ):
                     raise ValueError("Restore requires an empty library. Use a new data directory.")
                 if any((self.root / "downloads" / id).exists() for id in decoded):
                     raise ValueError("Restore requires an empty downloads directory.")

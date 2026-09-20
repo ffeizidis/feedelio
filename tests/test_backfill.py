@@ -91,9 +91,8 @@ def test_retry_after_and_initial_failure_can_resume(core, site, header):
     result = run(core, job)
     assert result["status"] == "queued"
     assert result["result"]["attempts"] == 1
-    assert (
-        datetime.fromisoformat(result["result"]["not_before"]) - datetime.now(timezone.utc)
-    ).total_seconds() > 590
+    wait = (datetime.fromisoformat(result["result"]["not_before"]) - datetime.now(timezone.utc)).total_seconds()
+    assert 590 < wait <= 86400  # A far-future Retry-After is capped at a day.
     core.tick()
     assert len(requests) == 1
     json_page(routes, "/busy", 1)
@@ -216,6 +215,15 @@ def test_existing_subscriptions_get_one_automatic_backfill(core, site):
     for _ in range(6):
         core.tick()
     assert len(core.rows("SELECT * FROM jobs WHERE kind='backfill'")) == 1
+    # A feed whose first refresh failed has no archive worth asking for yet.
+    dead = core.subscribe(site[0] + "/missing")["id"]
+    with pytest.raises(Exception):
+        core.refresh(dead)
+    for _ in range(6):
+        core.tick()
+    assert not core.rows(
+        "SELECT 1 FROM jobs WHERE kind='backfill' AND json_extract(payload,'$.feed_id')=?", (dead,)
+    )
 
 
 def test_substack_adapter_selection_and_settings(core):

@@ -63,7 +63,10 @@ async def protect(request: Request, call_next):
             )
             if not extension:
                 return JSONResponse({"detail": "Cross-origin requests are disabled."}, status_code=403)
-    length = int(request.headers.get("content-length", "0"))
+    try:
+        length = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        return JSONResponse({"detail": "Invalid Content-Length."}, status_code=400)
     if length > int(os.getenv("FEEDELIO_MAX_IMPORT_MB", "2048")) * 1024 * 1024:
         return JSONResponse({"detail": "Request too large."}, status_code=413)
     response = await call_next(request)

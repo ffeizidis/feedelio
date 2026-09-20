@@ -237,7 +237,7 @@ def test_restore_checks_empty_library_under_write_lock(core, site, monkeypatch):
     checked = []
 
     def check(sql, params=()):
-        if sql == "SELECT id FROM feeds LIMIT 1":
+        if sql.startswith("SELECT id FROM feeds WHERE id!='chrome'"):
             with sqlite3.connect(core.root / "app.sqlite", timeout=0) as other:
                 with pytest.raises(sqlite3.OperationalError, match="locked"):
                     other.execute("INSERT INTO settings VALUES('concurrent','1')")
@@ -245,6 +245,7 @@ def test_restore_checks_empty_library_under_write_lock(core, site, monkeypatch):
         return rows(sql, params)
 
     monkeypatch.setattr(core, "rows", check)
+    core.chrome_sync([])  # The extension's empty feed does not count as a library.
     core.restore(backup)
     assert checked
 

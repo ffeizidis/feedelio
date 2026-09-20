@@ -99,6 +99,7 @@ function readLocation() {
     return {
       modal: LIBRARY_TABS.includes(id) ? id : "feeds",
       manageFeed: id === "feeds" && feed ? feed : null,
+      manageFolder: id === "folders" && feed ? feed : null,
     };
   if (kind === "a" && id) return { selected: id };
   if (kind === "f" && id) return { view: "all", scope: { feed_id: id } };
@@ -411,7 +412,8 @@ function App() {
         ? "subscribe"
         : start.modal || null,
     );
-  const [manageFeed, setManageFeed] = useState(start.manageFeed || null);
+  const [manageFeed, setManageFeed] = useState(start.manageFeed || null),
+    [manageFolder, setManageFolder] = useState(start.manageFolder || null);
   const [toast, setToast] = useState(null),
     [busy, setBusy] = useState(0),
     [loadImages, setLoadImages] = useState(false),
@@ -432,6 +434,31 @@ function App() {
   // The reader and the library each push a history entry, so Back (keyboard,
   // toolbar or a mouse side button) closes them instead of leaving Feedelio.
   const layers = useRef({ stack: [], skip: 0, close: {}, url: "/" });
+  // Folders stay collapsed or open the way they were left, across visits.
+  const collapsedLoaded = useRef(false);
+  useEffect(() => {
+    if (overview.data && !collapsedLoaded.current) {
+      collapsedLoaded.current = true;
+      setCollapsed(
+        Object.fromEntries(
+          (overview.data.settings.collapsed_folders || []).map((id) => [
+            "nav" + id,
+            true,
+          ]),
+        ),
+      );
+    }
+  }, [overview.data]);
+  const toggleFolder = (id) => {
+    const next = { ...collapsed, ["nav" + id]: !collapsed["nav" + id] };
+    setCollapsed(next);
+    pref(
+      "collapsed_folders",
+      Object.keys(next)
+        .filter((k) => next[k])
+        .map((k) => k.slice(3)),
+    );
+  };
   useLayer(layers, "article", !!selected, () => setSelected(null));
   useLayer(layers, "modal", !!modal, () => setModal(null));
   useEffect(() => {
@@ -883,12 +910,7 @@ function App() {
               aria-label={
                 (collapsed["nav" + f.id] ? "Expand " : "Collapse ") + f.name
               }
-              onClick={() =>
-                setCollapsed({
-                  ...collapsed,
-                  ["nav" + f.id]: !collapsed["nav" + f.id],
-                })
-              }
+              onClick={() => toggleFolder(f.id)}
             >
               {collapsed["nav" + f.id] ? (
                 <ChevronRight size={13} />
@@ -1084,6 +1106,20 @@ function App() {
                 onClick={() => {
                   setManageFeed(activeFeed.id);
                   setModal("feeds");
+                }}
+              >
+                {heading}
+              </button>
+            </h1>
+          ) : scope.folder_id && !searchOpen ? (
+            <h1>
+              <button
+                className="heading-link"
+                title="Folder settings"
+                aria-label={"Manage folder: " + heading}
+                onClick={() => {
+                  setManageFolder(scope.folder_id);
+                  setModal("folders");
                 }}
               >
                 {heading}
@@ -1690,6 +1726,7 @@ function App() {
         <Library
           initial={modal}
           initialFeed={manageFeed}
+          initialFolder={manageFolder}
           layers={layers}
           pref={pref}
           data={data}
@@ -1697,6 +1734,7 @@ function App() {
           onClose={() => {
             setModal(null);
             setManageFeed(null);
+            setManageFolder(null);
           }}
           onSubscribe={() => setModal("subscribe")}
         />
@@ -1951,6 +1989,7 @@ function Subscribe({ data, act, onClose }) {
 function Library({
   initial,
   initialFeed,
+  initialFolder,
   layers,
   data,
   act,
@@ -1993,14 +2032,17 @@ function Library({
   const libraryRef = useRef(null);
   useEffect(() => {
     libraryRef.current.showModal();
+    // The folder sheet is a dialog too: it opens after this one, to sit on top.
+    setFolderSheet(data.folders.find((f) => f.id === initialFolder) || null);
   }, []);
-  // The library's address names its section, and the feed being edited.
+  // The library's address names its section, and the feed or folder being edited.
   useEffect(() => {
-    const url =
-      "/library/" + tab + (tab === "feeds" && edit ? "/" + edit.id : "");
+    const item =
+      tab === "feeds" ? edit : tab === "folders" ? folderSheet : null;
+    const url = "/library/" + tab + (item?.id ? "/" + item.id : "");
     layers.current.url = url;
     if (location.pathname !== url) history.replaceState(history.state, "", url);
-  }, [tab, edit]);
+  }, [tab, edit, folderSheet]);
   const [settingsWidth, setSettingsWidth] = useState(
     data.settings.sidebar_width,
   );
@@ -2036,28 +2078,21 @@ function Library({
         </button>
         <h2 className="section-label">Manage library</h2>
         <nav className="dialog-tabs" aria-label="Library settings">
-          {[
-            ["feeds", "Feeds"],
-            ["folders", "Folders"],
-            ["appearance", "Appearance"],
-            ["keyboard", "Keyboard"],
-            ["data", "Import & export"],
-            ["rules", "Rules"],
-            ["downloads", "Downloads"],
-            ["statistics", "Activity"],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              className={tab === id ? "active" : ""}
-              onClick={() => {
-                setTab(id);
-                setEdit(null);
-                setError("");
-              }}
-            >
-              {label}
-            </button>
-          ))}
+          {Object.entries(settingsSections)
+            .sort((a, b) => a[1].localeCompare(b[1]))
+            .map(([id, label]) => (
+              <button
+                key={id}
+                className={tab === id ? "active" : ""}
+                onClick={() => {
+                  setTab(id);
+                  setEdit(null);
+                  setError("");
+                }}
+              >
+                {label}
+              </button>
+            ))}
         </nav>
       </aside>
       <div className="settings-content">

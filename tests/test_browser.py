@@ -245,6 +245,22 @@ def test_desktop_reading_workflow(core, site, web_server):
         expect(page.locator(".feed-line")).to_have_count(0)
         page.get_by_role("button", name="Show all feeds").click()
         expect(page.locator(".feed-line")).to_have_count(1)
+        # A folder's heading opens that folder's settings; a collapsed folder stays
+        # collapsed across visits; library sections are listed by name.
+        page.get_by_role("button", name="Ideas & culture", exact=True).click()
+        page.get_by_role("button", name="Manage folder: Ideas & culture").click()
+        expect(page.get_by_role("textbox", name="Folder name")).to_have_value("Ideas & culture")
+        expect(page).to_have_url(web_server + "/library/folders/" + folder)
+        expect(page.locator(".dialog-tabs button").first).to_have_text("Activity")
+        page.get_by_role("button", name="Close dialog").click()
+        expect(page).to_have_url(web_server + "/library/folders")
+        page.get_by_role("button", name="Close library").click()
+        page.get_by_role("button", name="Collapse Ideas & culture").click()
+        expect(page.locator(".feed-line")).to_have_count(0)
+        page.reload()
+        expect(page.get_by_role("button", name="Expand Ideas & culture")).to_be_visible()
+        page.get_by_role("button", name="Expand Ideas & culture").click()
+        expect(page.locator(".feed-line")).to_have_count(1)
         # Desktop-only shell retains three panes at 200% zoom, with horizontal scrolling.
         page.locator(".article-row .row-title").first.click()
         page.evaluate("document.documentElement.style.zoom='2'")

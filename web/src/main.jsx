@@ -293,8 +293,7 @@ function App() {
         ? "subscribe"
         : null,
     );
-  const [manageFeed, setManageFeed] = useState(null),
-    [menu, setMenu] = useState(null);
+  const [manageFeed, setManageFeed] = useState(null);
   const [toast, setToast] = useState(null),
     [busy, setBusy] = useState(0),
     [loadImages, setLoadImages] = useState(false),
@@ -744,10 +743,6 @@ function App() {
                     }
                     style={{ paddingLeft: 41 + depth * 14 }}
                     onClick={() => stream("all", { feed_id: f.id })}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setMenu({ feed: f, x: e.clientX, y: e.clientY });
-                    }}
                   >
                     <i className="hue-dot" />
                     <span>{f.title}</span>
@@ -1072,7 +1067,11 @@ function App() {
                 {!scope.feed_id && (
                   <button
                     className="row-feed"
-                    onClick={() => stream("all", { feed_id: item.feed_id })}
+                    aria-label={"Manage feed: " + item.feed_title}
+                    onClick={() => {
+                      setManageFeed(item.feed_id);
+                      setModal("feeds");
+                    }}
                   >
                     {item.feed_title}
                   </button>
@@ -1491,83 +1490,7 @@ function App() {
           onSubscribe={() => setModal("subscribe")}
         />
       )}
-      {menu && (
-        <ContextMenu
-          x={menu.x}
-          y={menu.y}
-          label={menu.feed.title}
-          onClose={() => setMenu(null)}
-          items={[
-            {
-              icon: Settings2,
-              label: "Manage feed",
-              run: () => {
-                setManageFeed(menu.feed.id);
-                setModal("feeds");
-              },
-            },
-            {
-              icon: RefreshCw,
-              label: "Refresh feed",
-              run: () =>
-                run(
-                  "enqueue",
-                  { kind: "refresh", payload: { feed_id: menu.feed.id } },
-                  "Refresh queued",
-                ),
-            },
-            {
-              icon: CheckCheck,
-              label: "Mark feed as read",
-              run: () =>
-                run(
-                  "mark_all",
-                  { feed_id: menu.feed.id },
-                  "Feed marked as read · Z to undo",
-                ),
-            },
-          ]}
-        />
-      )}
     </main>
-  );
-}
-
-function ContextMenu({ x, y, label, items, onClose }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current;
-    // Keep the menu inside the viewport, then focus it so Escape and outside
-    // clicks close it like a native menu.
-    const box = el.getBoundingClientRect();
-    el.style.left = Math.min(x, window.innerWidth - box.width - 8) + "px";
-    el.style.top = Math.min(y, window.innerHeight - box.height - 8) + "px";
-    el.querySelector("button")?.focus();
-    const away = (e) => !el.contains(e.target) && onClose();
-    const key = (e) => e.key === "Escape" && onClose();
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", key);
-    return () => {
-      document.removeEventListener("mousedown", away);
-      document.removeEventListener("keydown", key);
-    };
-  }, []);
-  return (
-    <div ref={ref} className="context-menu" role="menu" aria-label={label}>
-      {items.map(({ icon: Icon, label, run }) => (
-        <button
-          key={label}
-          role="menuitem"
-          onClick={() => {
-            onClose();
-            run();
-          }}
-        >
-          <Icon size={14} />
-          {label}
-        </button>
-      ))}
-    </div>
   );
 }
 

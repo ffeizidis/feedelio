@@ -829,6 +829,51 @@ dialog::backdrop {
 .stat-cards span {
   font-size: 13px;
 }
+.jobs-log {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 18px;
+  margin-top: 30px;
+}
+.jobs-log > summary {
+  cursor: pointer;
+  padding: 14px 0;
+  font-weight: 600;
+}
+.jobs-log[open] > summary {
+  border-bottom: 1px solid var(--line-soft);
+}
+.job-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.job-row:last-child {
+  border-bottom: 0;
+}
+.job-row time {
+  font: 12px var(--mono);
+  color: var(--dim);
+  white-space: nowrap;
+}
+.job-row > span:nth-child(2) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.job-row small {
+  display: block;
+  color: var(--muted);
+}
+.job-row > span:nth-child(3) {
+  color: var(--muted);
+}
+.job-row .job-failed {
+  color: var(--error);
+}
 .queue-table > div {
   display: flex;
   justify-content: space-between;
@@ -841,8 +886,11 @@ dialog::backdrop {
   text-align: right;
   color: var(--muted);
 }
+.queue-table {
+  padding-top: 6px;
+}
 .queue-table .muted {
-  margin: 12px 0 20px;
+  margin: 12px 0 14px;
 }
 .habit-table > div {
   display: flex;
@@ -1003,7 +1051,7 @@ dialog::backdrop {
   display: inline-flex;
   align-items: baseline;
   font:
-    600 21px/1 system-ui,
+    600 23px/1 system-ui,
     sans-serif;
   letter-spacing: -0.025em;
   text-decoration: none;
@@ -1034,10 +1082,10 @@ dialog::backdrop {
   margin-top: 20px;
   padding: 7px 10px;
   color: var(--muted);
-  font-size: 16px;
+  font-size: 18px;
 }
 .search-trigger span {
-  font: 12px var(--mono);
+  font: 14px var(--mono);
   color: var(--dim);
 }
 .views {
@@ -1050,7 +1098,7 @@ dialog::backdrop {
   justify-content: flex-start;
   gap: 11px;
   padding: 7px 10px;
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1;
   color: var(--muted);
   height: 38px;
@@ -1079,14 +1127,11 @@ dialog::backdrop {
   margin-top: 30px;
   padding: 0 4px 0 10px;
 }
-.subscriptions-heading > button {
-  padding: 0;
-  font: 500 13px/1 var(--mono);
+.subscriptions-heading > h2 {
+  margin: 0;
+  font: 500 15px/1 var(--mono);
   letter-spacing: 0.16em;
   color: var(--dim);
-}
-.subscriptions-heading > button > svg {
-  display: none;
 }
 .subscriptions-heading > div {
   display: flex;
@@ -1115,7 +1160,7 @@ dialog::backdrop {
   min-width: 0;
   justify-content: flex-start;
   padding: 6px 4px;
-  font-size: 16px;
+  font-size: 18px;
 }
 .folder-line > button > span:first-of-type {
   overflow: hidden;
@@ -1133,7 +1178,7 @@ dialog::backdrop {
   min-height: 38px;
   padding: 7px 10px;
   text-align: left;
-  font-size: 17px;
+  font-size: 19px;
   line-height: 1.2;
 }
 .feed-line > span:not(.count) {
@@ -1156,7 +1201,7 @@ dialog::backdrop {
 }
 .sidebar .count,
 .sidebar .pill {
-  font-size: 14px;
+  font-size: 16px;
 }
 .feed-line .count {
   color: var(--dim);

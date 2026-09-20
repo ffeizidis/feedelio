@@ -92,6 +92,8 @@ All requested areas have an implementation. Integrations that depend on a publis
 - Backfill can only retrieve history the publisher exposes. WordPress feeds are paged with `?paged=N` (detected from the feed's generator; the first missing page ends the archive). A feed without pagination reports that explicitly; configure **Archive feed URL** when available. Substack support uses its public archive endpoint on `*.substack.com`; custom domains without feed pagination need an explicit archive feed. It does not unlock paywalls, solve anti-bot challenges, or guarantee full text for every post; accessible body/preview text is stored. Scrapers operate on server-rendered HTML; JavaScript-only sites need an external feed bridge.
 - Offline episodes are offline **on the server**; the browser still needs a connection to Feedelio. JSON backups containing audio can be large and are assembled in memory; for large libraries, also take a stopped-container volume snapshot. Default JSON import limit: 2 GiB, configurable with `FEEDELIO_MAX_IMPORT_MB`.
 
+Every page has an address: `/f/<feed id>` for a feed's stream, `/d/<folder id>` for a folder, `/starred`, `/bookmarks` and `/history` for those views, `/a/<article id>` for an open article. A reload or a shared link lands on the same page, and an article opened by address shows within its feed's stream. The Downloads tab keeps the worker's log in one collapsed frame: the backlog per kind of job and the last thirty jobs with the time each last moved.
+
 ## Keyboard shortcuts
 
 | Key | Action |

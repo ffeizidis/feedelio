@@ -89,3 +89,15 @@ def test_auth_csrf_and_command_allowlist(core, monkeypatch):
             extension.get("/api/overview", headers={"Authorization": "Bearer private-test-token"}).status_code
             == 200
         )
+
+
+def test_page_addresses_serve_the_app_and_files_still_404(core):
+    import pytest
+
+    if not (app.routes and any(getattr(r, "name", "") == "web" for r in app.routes)):
+        pytest.skip("Build the frontend with npm run build --prefix web first.")
+    with TestClient(app) as client:
+        home = client.get("/").text
+        assert client.get("/f/abc123").text == home and client.get("/a/abc123").text == home
+        assert client.get("/starred").text == home
+        assert client.get("/missing.js").status_code == 404

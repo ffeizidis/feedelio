@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from feedelio.core import Core
 
@@ -205,6 +206,19 @@ def download(id: str):
         return FileResponse(core.download_path(id), media_type="audio/mpeg")
 
 
+class SinglePage(StaticFiles):
+    """The app names its pages in the address (/f/<feed>, /a/<article>, …); they
+    are all the one page, so a reload of any of them gets it."""
+
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as error:
+            if error.status_code != 404 or "." in path.rsplit("/", 1)[-1]:
+                raise
+            return await super().get_response("index.html", scope)
+
+
 static = Path(os.getenv("FEEDELIO_STATIC", "web/dist"))
 if static.is_dir():
-    app.mount("/", StaticFiles(directory=static, html=True), name="web")
+    app.mount("/", SinglePage(directory=static, html=True), name="web")

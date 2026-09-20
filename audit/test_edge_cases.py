@@ -93,7 +93,7 @@ def test_quiet_feed_detection_in_browser(lab):
         )
     lab.show()
     lab.manager("Subscriptions")
-    expect(lab.page.locator(".feed-updated.issue")).to_contain_text("stale")
+    expect(lab.page.locator(".feed-updated.stale")).to_contain_text("stale")
     expect(lab.page.locator(".feed-issue")).to_have_attribute("title", "No new items in 14 days or more")
 
 

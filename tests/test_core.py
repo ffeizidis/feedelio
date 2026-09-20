@@ -309,6 +309,49 @@ def test_rate_limited_extraction_is_retried_later(core, site):
     assert "Full text." in core.article(article)["body"]
 
 
+def test_youtube_entries_keep_their_description_and_learn_shorts(core, site, monkeypatch):
+    from feedelio import core as module
+
+    base, routes, _ = site
+    routes["/yt"] = (
+        200,
+        {"Content-Type": "application/atom+xml"},
+        """<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+        <title>Channel</title><id>yt:channel:x</id>
+        <entry><id>yt:video:abcdefghijk</id><title>A short one</title>
+          <link rel="alternate" href="https://www.youtube.com/watch?v=abcdefghijk"/>
+          <media:group><media:description>Subscribe: https://example.test/
+
+Second paragraph</media:description></media:group></entry>
+        <entry><id>yt:video:zyxwvutsrqp</id><title>A long one</title>
+          <link rel="alternate" href="https://www.youtube.com/watch?v=zyxwvutsrqp"/>
+          <media:group><media:description>Plain</media:description></media:group></entry>
+        </feed>""",
+    )
+    probed = []
+
+    def probe(url, options=None):
+        probed.append(url)
+        short = "abcdefghijk" in url
+        return dict(short=short, url="https://www.youtube.com/shorts/abcdefghijk" if short else url)
+
+    monkeypatch.setattr(module, "probe_video", probe)
+    monkeypatch.setattr(module, "extract", lambda *a, **k: pytest.fail("Video pages must not be extracted"))
+    core.save_rule("Skip Shorts", "url", r"youtube\.com/shorts/", "read", id="shorts")
+    core.save_settings({"new_feed_read": False})
+    id = core.subscribe(base + "/yt")["id"]
+    core.refresh(id)
+    while core.tick():
+        pass
+    long, short = sorted(core.articles()["items"], key=lambda a: a["title"])
+    assert len(probed) == 2
+    assert short["url"] == "https://www.youtube.com/shorts/abcdefghijk" and short["tags"] == ["short"]
+    assert short["read"] == 1 and long["read"] == 0 and long["tags"] == []
+    body = core.article(short["id"])["body"]
+    assert '<a href="https://example.test/"' in body and "<p>Second paragraph</p>" in body
+    assert core.article(long["id"])["embed"] == "https://www.youtube-nocookie.com/embed/zyxwvutsrqp"
+
+
 def test_site_scraper_and_feed_backfill(core, site):
     base, routes, _ = site
     routes["/no-feed"] = (

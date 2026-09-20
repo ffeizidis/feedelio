@@ -41,12 +41,15 @@ from .content import (
     fetch,
     fingerprint,
     local_frame_origin,
+    looks_like_html,
     origin,
     plain,
+    probe_video,
     request_options,
     safe_url,
     sanitize,
     text_html,
+    video_id,
 )
 from .network import PinnedAdapter, http_client
 from .reader_extensions import BoundedParser, ExtendedFeedparser
@@ -74,6 +77,7 @@ DEFAULTS = dict(
     invidious="",
     rsshub="https://rsshub.app",
     sidebar_width=252,
+    sidebar_unread_only=False,
     list_width=590,
     list_display="title",
     accent="blue",
@@ -251,7 +255,13 @@ class Core:
         }.items():
             if merged[key] not in choices:
                 raise ValueError(f"Invalid {key}.")
-        for key in ("feed_colours", "reduce_motion", "new_feed_read", "extract_articles"):
+        for key in (
+            "feed_colours",
+            "reduce_motion",
+            "new_feed_read",
+            "extract_articles",
+            "sidebar_unread_only",
+        ):
             if not isinstance(merged[key], bool):
                 raise ValueError(f"{key} must be a boolean.")
         if merged["invidious"]:
@@ -798,6 +808,8 @@ class Core:
         url = clean_url(url) if urlsplit(url).scheme in ("http", "https") else ""
         if enclosures is not None:
             enclosures = [e for e in enclosures if urlsplit(e.get("href") or "").scheme in ("http", "https")]
+        if body and not looks_like_html(body):  # e.g. a YouTube description, from any source
+            body = text_html(body)
         body = sanitize(body, url)
         digest = fingerprint(title, plain(body))
         guid = guid or url or digest
@@ -1115,17 +1127,23 @@ class Core:
         if not a["source_url"]:
             raise ValueError("This article has no source page URL to extract.")
         f = self.one("SELECT * FROM feeds WHERE id=?", (a["feed_id"],))
-        result = extract(a["url"], request_options(f))
+        video = probe_video(a["url"], request_options(f)) if video_id(a["url"]) else None
+        result = None if video else extract(a["url"], request_options(f))
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             # Fetching can take seconds: merge content into current user state,
             # never the snapshot from before the request.
             a = self.one("SELECT * FROM articles WHERE id=?", (article_id,))
-            a.update(
-                body=result["body"], url=result["url"], transcript=result["transcript"] or a["transcript"]
-            )
-            if result["paywall"]:
-                a["tags"] = sorted(set(a["tags"] + ["paywall"]))
+            if video:  # The description is the article; only the kind of video is learned.
+                a["url"] = video["url"]
+                if video["short"]:
+                    a["tags"] = sorted(set(a["tags"] + ["short"]))
+            else:
+                a.update(
+                    body=result["body"], url=result["url"], transcript=result["transcript"] or a["transcript"]
+                )
+                if result["paywall"]:
+                    a["tags"] = sorted(set(a["tags"] + ["paywall"]))
             a = self.apply_rules(a)
             self.db.execute(
                 "UPDATE articles SET extracted=1,body=?,text=?,url=?,transcript=?,tags=?,words=?,read=?,starred=?,deleted=? WHERE id=?",

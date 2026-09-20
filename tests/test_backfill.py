@@ -173,7 +173,7 @@ def test_substack_batch_then_single_articles_and_dedup(core, site):
     assert requests[-1][0] == "/post/1"
     assert core.articles()["total"] == 2
     assert core.article(existing)["starred"]
-    assert core.article(existing)["body"] == "Keep feed body"
+    assert core.article(existing)["body"] == "<p>Keep feed body</p>"
     due(core, job)
     result = run(core, job)
     assert result["status"] == "done"

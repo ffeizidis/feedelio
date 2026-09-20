@@ -44,6 +44,15 @@ def test_desktop_reading_workflow(core, site, web_server):
         base + "/second",
         "<p>There is a kind of attention that asks nothing of the world except that it be itself.</p><h2>The art of noticing</h2><p>A walk without a destination can change the shape of an afternoon.</p>",
     )
+    core.ingest(
+        feed,
+        "short",
+        "A sixty-second essay",
+        "https://www.youtube.com/shorts/abcdefghijk",
+        "Watch it",
+        published="2020-01-01T00:00:00+00:00",
+        tags=["paywall"],
+    )
     errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -51,7 +60,10 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(web_server)
         expect(page.locator(".stream-pane .article-list")).to_be_visible()
-        expect(page.locator(".article-row")).to_have_count(2)
+        expect(page.locator(".article-row")).to_have_count(3)
+        marks = page.locator(".article-row", has_text="A sixty-second essay").locator(".row-marks")
+        expect(marks.get_by_label("YouTube Short")).to_be_visible()
+        expect(marks.get_by_label("Paywalled")).to_be_visible()
         page.keyboard.press("j")
         expect(page.locator(".reading-content h1")).to_be_visible()
         page.keyboard.press("s")
@@ -73,6 +85,14 @@ def test_desktop_reading_workflow(core, site, web_server):
         output.mkdir(exist_ok=True)
         page.screenshot(path=str(output / "desktop.png"), full_page=True)
         page.get_by_role("button", name="Manage library").click()
+        # A feed opened from the list is a layer of its own: Back returns to the list.
+        page.get_by_role("combobox", name="Filter feeds by status").select_option("error")
+        expect(page.locator(".feed-table .feed-info")).to_have_count(0)
+        page.get_by_role("combobox", name="Filter feeds by status").select_option("all")
+        page.locator(".feed-info", has_text="The Sunday Journal").click()
+        expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()
+        page.go_back()
+        expect(page.locator(".feed-info", has_text="The Sunday Journal")).to_be_visible()
         page.get_by_role("button", name="Folders", exact=True).click()
         page.get_by_role("button", name="+ New folder", exact=True).click()
         page.get_by_role("textbox", name="Folder name").fill("Engineering")
@@ -103,10 +123,22 @@ def test_desktop_reading_workflow(core, site, web_server):
         expect(page.get_by_role("heading", name="Manage library")).to_be_visible()
         expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()
         page.get_by_role("button", name="Activity", exact=True).click()
-        expect(page.get_by_text("Archive size · 2 articles")).to_be_visible()
+        expect(page.get_by_text("Archive size · 3 articles")).to_be_visible()
         page.go_back()
         expect(page.locator("dialog")).to_have_count(0)
         assert page.url.startswith(web_server)
+        # Only feeds with unread articles, once everything here is read.
+        expect(page.locator(".feed-line")).to_have_count(1)
+        page.get_by_role("button", name="Show only feeds with unread articles").click()
+        expect(page.get_by_role("button", name="Show all feeds")).to_be_visible()
+        expect(page.locator(".feed-line")).to_have_count(1)
+        page.locator(".feed-line", has_text="The Sunday Journal").click()
+        page.get_by_role("button", name="Mark this stream as read").click()
+        expect(page.locator(".feed-line")).to_have_count(1)  # The feed being read stays.
+        page.get_by_role("button", name="All articles").click()
+        expect(page.locator(".feed-line")).to_have_count(0)
+        page.get_by_role("button", name="Show all feeds").click()
+        expect(page.locator(".feed-line")).to_have_count(1)
         # Desktop-only shell retains three panes at 200% zoom, with horizontal scrolling.
         page.locator(".article-row .row-title").first.click()
         page.evaluate("document.documentElement.style.zoom='2'")

@@ -1542,10 +1542,18 @@ class Core:
                 "UPDATE jobs SET status=CASE WHEN status='paused' THEN status ELSE ? END,updated=?,result=?,error=? WHERE id=?",
                 (status, now(), json.dumps(state), error, job["id"]),
             )
-            self.db.execute(
-                "INSERT OR REPLACE INTO settings VALUES('archive_next_request',?)",
-                (json.dumps(state["not_before"]),),
-            )
+            self._pace_host(job, state["not_before"])
+
+    def _archive_hosts(self):
+        """Sites with an archive request still pending their minute, past deadlines dropped."""
+        hosts = self.rows("SELECT value FROM settings WHERE key='archive_hosts'")
+        hosts = json.loads(hosts[0]["value"]) if hosts else {}
+        return {h: t for h, t in hosts.items() if t > now()}
+
+    def _pace_host(self, job, until):
+        hosts = self._archive_hosts()
+        hosts[archives.host(job["result"], job.get("feed_url"))] = until
+        self.db.execute("INSERT OR REPLACE INTO settings VALUES('archive_hosts',?)", (json.dumps(hosts),))
 
     def purge(self):
         count = 0
@@ -1617,31 +1625,34 @@ class Core:
                 self._enqueue("backfill", {"feed_id": feed["id"]})
             # Keeping feeds current comes first: after a large import thousands of
             # extractions are queued, and new posts must not wait behind them.
-            # Archive pages are throttled to one a minute, so they cannot starve
-            # the extraction backlog.
-            jobs = self.rows(
+            # Archive pages are throttled to one a minute per site, so they cannot
+            # starve the extraction backlog, and a hundred blogs queued together
+            # still advance side by side instead of taking turns at one a minute.
+            hosts = self._archive_hosts()
+            job = None
+            for candidate in self.rows(
                 """
-                SELECT * FROM jobs j WHERE status='queued'
-                AND coalesce(json_extract(result,'$.not_before'),'')<=? AND (
-                    kind!='backfill' OR (
-                        coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='archive_next_request'),'')<=?
-                        AND EXISTS(SELECT 1 FROM feeds f WHERE f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0)
-                    )
-                ) ORDER BY CASE kind WHEN 'extract' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
+                SELECT j.*,f.url feed_url FROM jobs j
+                LEFT JOIN feeds f ON f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0
+                WHERE status='queued' AND coalesce(json_extract(result,'$.not_before'),'')<=?
+                AND (kind!='backfill' OR f.id IS NOT NULL)
+                ORDER BY CASE kind WHEN 'extract' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
                   WHEN 'refresh' THEN -coalesce(json_extract(payload,'$.manual'),0) ELSE 0 END,
-                  updated,created LIMIT 1
+                  updated,created
             """,
-                (now(), now()),
-            )
-            if not jobs:
+                (now(),),
+            ):
+                if (
+                    candidate["kind"] != "backfill"
+                    or archives.host(candidate["result"], candidate["feed_url"]) not in hosts
+                ):
+                    job = candidate
+                    break
+            if job is None:
                 return False
-            job = jobs[0]
             self.db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (now(), job["id"]))
             if job["kind"] == "backfill":
-                self.db.execute(
-                    "INSERT OR REPLACE INTO settings VALUES('archive_next_request',?)",
-                    (json.dumps((datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()),),
-                )
+                self._pace_host(job, (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat())
         try:
             p = job["payload"]
             if job["kind"] == "refresh":

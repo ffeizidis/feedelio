@@ -2853,8 +2853,8 @@ function QueueSummary({ queue }) {
         );
       })}
       <p className="muted">
-        Archive pages are fetched one a minute across the whole library, so many
-        backfills queued together take turns.
+        Each site is asked for one archive page a minute, so backfills on
+        different sites advance side by side.
       </p>
     </div>
   );

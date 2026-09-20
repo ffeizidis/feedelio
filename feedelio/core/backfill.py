@@ -40,6 +40,13 @@ def initial(feed, url=None):
     )
 
 
+def host(state, feed_url):
+    """The site a backfill's next request goes to: pacing is per site, so one slow
+    archive never holds up the others."""
+    url = (state or {}).get("next_url") or ((state or {}).get("pending") or [{}])[0].get("url") or feed_url
+    return (urlsplit(url).hostname or "").removeprefix("www.")
+
+
 def youtube_channel(url):
     """The channel id of a YouTube uploads feed, which lists only the newest 15 videos."""
     parts = urlsplit(url)

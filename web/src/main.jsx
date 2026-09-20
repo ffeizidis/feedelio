@@ -2498,6 +2498,7 @@ function Library({
                 </div>
               )}
               <h3>Background jobs</h3>
+              <QueueSummary queue={data.queue || {}} />
               {data.jobs
                 .filter((j) => j.status === "failed")
                 .map((j) => (
@@ -2816,6 +2817,46 @@ function FeedEditor({ feed: f, data, act, onBack }) {
         settings.
       </p>
     </form>
+  );
+}
+
+// What the worker is doing and has done in the last day, one line per kind of job.
+function QueueSummary({ queue }) {
+  const kinds = [
+    ["refresh", "Feed updates", "updated"],
+    ["backfill", "Archive backfills", "finished"],
+    ["extract", "Full-text extractions", "extracted"],
+    ["download", "Episode downloads", "downloaded"],
+  ];
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  return (
+    <div className="queue-table">
+      {kinds.map(([kind, label, verb]) => {
+        const q = queue[kind] || {
+          waiting: 0,
+          done: 0,
+          failed: 0,
+          articles: 0,
+        };
+        return (
+          <div key={kind}>
+            <span>{label}</span>
+            <span>
+              {q.waiting ? `${q.waiting} waiting` : "Nothing waiting"} ·{" "}
+              {q.done} {verb} in the last day
+              {q.failed ? `, ${q.failed} failed` : ""}
+              {kind === "backfill" && q.articles
+                ? ` · ${plural(q.articles, "older article")} added so far`
+                : ""}
+            </span>
+          </div>
+        );
+      })}
+      <p className="muted">
+        Archive pages are fetched one a minute across the whole library, so many
+        backfills queued together take turns.
+      </p>
+    </div>
   );
 }
 

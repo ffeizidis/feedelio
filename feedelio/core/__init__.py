@@ -418,9 +418,25 @@ class Core:
             jobs=self.rows("SELECT * FROM jobs ORDER BY created DESC LIMIT 30"),
             backfills=self.rows("SELECT * FROM jobs WHERE kind='backfill' ORDER BY created DESC"),
             downloads=self.rows("SELECT * FROM jobs WHERE kind='download' ORDER BY created DESC"),
+            queue=self.queue(),
             undo=self.rows("SELECT id,label FROM undo ORDER BY created DESC LIMIT 1"),
             worker=self.rows("SELECT value FROM settings WHERE key='worker_heartbeat'"),
         )
+
+    def queue(self):
+        """The worker's backlog by kind: what is waiting, what ran in the last day, and
+        how many older articles the archives have brought in so far."""
+        day = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        rows = self.rows(
+            """SELECT kind,
+              coalesce(sum(status IN ('queued','running')),0) waiting,
+              coalesce(sum(status='done' AND updated>?),0) done,
+              coalesce(sum(status='failed' AND updated>?),0) failed,
+              coalesce(sum(CASE WHEN kind='backfill' THEN json_extract(result,'$.articles') END),0) articles
+              FROM jobs GROUP BY kind""",
+            (day, day),
+        )
+        return {r["kind"]: r for r in rows}
 
     def discover(self, url):
         url = safe_url(url)

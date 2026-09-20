@@ -48,6 +48,17 @@ def clean_url(url: str) -> str:
     return urlunsplit(parts._replace(query=urlencode(query)))
 
 
+def same_feed(a: str, b: str) -> bool:
+    """One feed served under variant spellings: scheme, a www prefix, a trailing slash, case."""
+
+    def key(url):
+        parts = urlsplit(url.strip())
+        host = (parts.hostname or "").removeprefix("www.")
+        return host, parts.port, parts.path.rstrip("/") or "/", parts.query
+
+    return key(a) == key(b)
+
+
 def origin(url: str):
     parts = urlsplit(url)
     return parts.scheme, parts.hostname, parts.port or (443 if parts.scheme == "https" else 80)

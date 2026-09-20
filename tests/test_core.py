@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from feedelio.core import Core
-from feedelio.core.content import embed_url, safe_url, sanitize
+from feedelio.core.content import embed_url, safe_url, same_feed, sanitize
 
 
 def subscription(core, site, path="/rss"):
@@ -143,9 +143,15 @@ def test_dedup_updated_entries_and_index(core, site):
     assert same == original["id"]
     core.ingest(id, "one", "Publisher correction", original["url"], "<p>Heliotrope correction</p>")
     assert core.articles(q="heliotrope")["total"] == 1
+    assert core.articles(q="Heliotrop corr")["total"] == 1  # Words match as typed.
     assert core.articles(q="independent")["total"] == 0
     with pytest.raises(ValueError, match="Already subscribed"):
         core.subscribe(site[0] + "/rss ")
+    with pytest.raises(ValueError, match="Already subscribed"):
+        core.subscribe(site[0].replace("http://", "https://") + "/rss/")
+    assert same_feed("http://www.example.com/feed/", "https://Example.com/feed")
+    assert not same_feed("https://example.com/feed?x=1", "https://example.com/feed")
+    assert not same_feed("https://blog.example.com/feed", "https://example.com/feed")
     second = core.subscribe(site[0] + "/json")["id"]
     core.ingest(second, "copy", "Publisher correction", site[0] + "/copy", "<p>Heliotrope correction</p>")
     assert core.articles()["total"] == 1

@@ -2619,7 +2619,15 @@ function DataSettings({ data, act, submit }) {
       );
       setNotice(
         format === "opml"
-          ? result.imported + " subscriptions imported."
+          ? result.imported +
+              " subscriptions imported." +
+              (result.unresolved
+                ? " " +
+                  result.unresolved +
+                  " host" +
+                  (result.unresolved === 1 ? "" : "s") +
+                  " could not be resolved; those feeds will show a refresh error."
+                : "")
           : result.restored + " articles restored.",
       );
     });

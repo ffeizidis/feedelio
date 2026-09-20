@@ -14,7 +14,7 @@ dependencies = [
   "httpcore==1.0.9", "urllib3==2.8.0", "requests>=2.32,<3",
   "nh3>=0.2,<1", "defusedxml>=0.7,<1", "markdownify>=1,<2",
   "rapidfuzz>=3,<4", "regex>=2024.11", "tinycss2>=1.4,<2", "mcp>=1.12,<2", "lxml>=5,<7",
-  "supervisor>=4.2,<5"
+  "supervisor>=4.2,<5", "brotli>=1.1,<2"
 ]
 
 [project.optional-dependencies]

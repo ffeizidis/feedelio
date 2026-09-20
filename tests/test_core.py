@@ -45,6 +45,32 @@ def test_conditional_headers_redirect_and_custom_ua(core, site):
     assert core.articles()["total"] == 1
 
 
+def test_redirect_onto_an_existing_subscription_keeps_both_urls(core, site):
+    base, routes, _ = site
+    routes["/moved"] = (301, {"Location": "/rss"}, "")
+    core.subscribe(base + "/rss")
+    id = core.subscribe(base + "/moved")["id"]
+    core.refresh(id)
+    moved = next(f for f in core.feeds() if f["id"] == id)
+    assert moved["url"] == base + "/moved" and moved["error"] is None
+    assert sorted(f["url"] for f in core.feeds()) == [base + "/moved", base + "/rss"]
+
+
+def test_brotli_feed_served_without_negotiation_is_decoded(core, site):
+    import brotli
+
+    base, routes, _ = site
+    # Some CDNs send Brotli regardless of Accept-Encoding; the decoder must be present.
+    routes["/br"] = (
+        200,
+        {"Content-Type": "application/rss+xml", "Content-Encoding": "br"},
+        brotli.compress(routes["/rss"][2].encode()),
+    )
+    id = subscription(core, site, "/br")
+    core.refresh(id)
+    assert core.feeds()[0]["error"] is None and core.articles()["total"] == 1
+
+
 def test_discovery_and_hash_fallback(core, site):
     base, routes, _ = site
     assert core.discover(base + "/home")[0]["url"] == base + "/rss"
@@ -245,6 +271,18 @@ def test_worker_health_failures_and_unique_jobs(core, site):
     assert core.overview()["jobs"][0]["status"] in ("failed", "queued")
 
 
+def test_refresh_jobs_run_before_an_older_extraction_backlog(core, site):
+    id = subscription(core, site)
+    core.db.execute("UPDATE jobs SET status='done'")  # Clear the subscription's own jobs.
+    core.db.commit()
+    for a in core.articles()["items"]:
+        core.enqueue("extract", {"article_id": a["id"]})
+    refresh = core.enqueue("refresh", {"feed_id": id})["id"]
+    core.tick()
+    ran = core.rows("SELECT id, kind FROM jobs WHERE status='done' ORDER BY updated DESC LIMIT 1")
+    assert ran[0]["id"] == refresh and ran[0]["kind"] == "refresh"
+
+
 def test_site_scraper_and_feed_backfill(core, site):
     base, routes, _ = site
     routes["/no-feed"] = (
@@ -390,3 +428,32 @@ def test_statistics_report_archive_size(core, site):
     archive = core.statistics()["archive"]
     assert archive["downloads"] == 1
     assert archive["bytes"] > 1000 + (core.root / "app.sqlite").stat().st_size
+
+
+def test_opml_import_keeps_feeds_whose_host_no_longer_resolves(core, monkeypatch):
+    import socket
+
+    from feedelio.core import content
+
+    def resolve(host, port):
+        if host == "gone.test":
+            raise socket.gaierror(-5, "No address associated with hostname")
+        return ["93.184.216.34"]
+
+    monkeypatch.delenv("FEEDELIO_ALLOW_PRIVATE_NETWORK", raising=False)
+    monkeypatch.setattr(content, "addresses", resolve)
+    xml = """<opml version="1.0"><body><outline text="Blogs">
+      <outline text="Alive" type="rss" xmlUrl="https://alive.test/feed"/>
+      <outline text="Gone" type="rss" xmlUrl="https://gone.test/feed"/>
+    </outline></body></opml>"""
+    assert core.import_opml(xml) == {"imported": 2, "unresolved": 1}
+    assert sorted(f["title"] for f in core.feeds()) == ["Alive", "Gone"]
+    with pytest.raises(ValueError, match="gone.test could not be resolved"):
+        core.subscribe("https://gone.test/other")
+
+    def private(host, port):
+        raise ValueError("Private network addresses are disabled.")
+
+    monkeypatch.setattr(content, "addresses", private)
+    with pytest.raises(ValueError, match="Private network"):
+        core.import_opml(xml)

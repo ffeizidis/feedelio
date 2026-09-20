@@ -277,7 +277,21 @@ def probe_video(url, options=None):
     id = video_id(url)
     headers = {"User-Agent": (options or {}).get("user_agent") or "Feedelio/0.1 (+private feed reader)"}
     headers["Cookie"] = "SOCS=CAI"
+    duration = 0
     with http_client(options, timeout=30) as client:
         response = client.head(f"https://www.youtube.com/shorts/{id}", headers=headers)
-    short = response.status_code == 200
-    return dict(short=short, url=f"https://www.youtube.com/shorts/{id}" if short else url)
+        short = response.status_code == 200
+        page = client.get(f"https://www.youtube.com/watch?v={id}", headers=headers)
+        if page.status_code == 200:
+            found = regex.search(r'itemprop="duration" content="([^"]+)"', page.text[:4_000_000])
+            duration = iso_duration(found.group(1)) if found else 0
+    return dict(short=short, url=f"https://www.youtube.com/shorts/{id}" if short else url, duration=duration)
+
+
+def iso_duration(value):
+    """PT1H2M3S → seconds; anything unexpected is 0 rather than an error."""
+    found = regex.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", value or "")
+    if not found:
+        return 0
+    days, hours, minutes, seconds = (int(part or 0) for part in found.groups())
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds

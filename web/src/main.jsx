@@ -142,6 +142,14 @@ function closeLayer(state, name) {
   state.skip += depth;
   history.go(-depth);
 }
+function clock(seconds) {
+  const h = Math.floor(seconds / 3600),
+    m = Math.floor((seconds % 3600) / 60),
+    s = seconds % 60;
+  return (h ? [h, m, s] : [m, s])
+    .map((n, i) => (i ? String(n).padStart(2, "0") : n))
+    .join(":");
+}
 function fileSize(bytes) {
   const units = ["B", "KB", "MB", "GB"];
   let i = 0;
@@ -1305,8 +1313,9 @@ function App() {
                   </div>
                   <details className="article-details">
                     <summary>
-                      {a.reading_minutes} min read · {a.words.toLocaleString()}{" "}
-                      words
+                      {a.duration
+                        ? `${clock(a.duration)} video`
+                        : `${a.reading_minutes} min read · ${a.words.toLocaleString()} words`}
                     </summary>
                     {a.author && <p>By {a.author}</p>}
                   </details>
@@ -1316,8 +1325,8 @@ function App() {
                       {playVideo ? (
                         <iframe
                           title={a.title}
-                          src={a.embed}
-                          allow="fullscreen; picture-in-picture"
+                          src={a.embed + "?autoplay=1"}
+                          allow="autoplay; fullscreen; picture-in-picture"
                           allowFullScreen
                           referrerPolicy="strict-origin-when-cross-origin"
                         />
@@ -2119,16 +2128,26 @@ function Library({
                                 )
                               }
                             />
-                            <button
-                              className="feed-info"
-                              onClick={() => openFeed(f)}
-                            >
+                            <div className="feed-info">
                               <i className="hue-dot" />
                               <span>
-                                <strong>{f.title}</strong>
-                                <small>{f.url}</small>
+                                <button
+                                  className="feed-open"
+                                  onClick={() => openFeed(f)}
+                                >
+                                  <strong>{f.title}</strong>
+                                </button>
+                                <small>
+                                  <a
+                                    href={f.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    {f.url}
+                                  </a>
+                                </small>
                               </span>
-                            </button>
+                            </div>
                           </div>
                           <span className="feed-folder">
                             {f.folder_id === "inbox"
@@ -2553,6 +2572,16 @@ function FeedEditor({ feed: f, data, act, onBack }) {
         <Favicon feed={f} enabled={data.settings.images} />
         {f.title}
       </h3>
+      <p className="feed-links">
+        <a href={f.url} target="_blank" rel="noreferrer">
+          <Rss size={13} /> {f.url}
+        </a>
+        {f.site_url && (
+          <a href={f.site_url} target="_blank" rel="noreferrer">
+            <ExternalLink size={13} /> {f.site_url}
+          </a>
+        )}
+      </p>
       {feedIssue(f) && <p className="inline-error">{feedIssue(f).note}</p>}
       <BackfillStatus
         jobs={data.backfills || []}

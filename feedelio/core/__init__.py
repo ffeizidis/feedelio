@@ -156,6 +156,8 @@ class Core:
             (self.root / "downloads").mkdir(exist_ok=True)
             self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
             self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
+            if "duration" not in {r[1] for r in self.db.execute("PRAGMA table_info(articles)")}:
+                self.db.execute("ALTER TABLE articles ADD COLUMN duration INTEGER NOT NULL DEFAULT 0")
             # Stable subscription colours, including deleted feeds so restoring or
             # removing subscriptions never shifts the remaining palette.
             self.db.execute("""UPDATE feeds SET options=json_set(options,'$.hue',
@@ -1136,6 +1138,7 @@ class Core:
             a = self.one("SELECT * FROM articles WHERE id=?", (article_id,))
             if video:  # The description is the article; only the kind of video is learned.
                 a["url"] = video["url"]
+                a["duration"] = video["duration"]
                 if video["short"]:
                     a["tags"] = sorted(set(a["tags"] + ["short"]))
             else:
@@ -1146,7 +1149,7 @@ class Core:
                     a["tags"] = sorted(set(a["tags"] + ["paywall"]))
             a = self.apply_rules(a)
             self.db.execute(
-                "UPDATE articles SET extracted=1,body=?,text=?,url=?,transcript=?,tags=?,words=?,read=?,starred=?,deleted=? WHERE id=?",
+                "UPDATE articles SET extracted=1,body=?,text=?,url=?,transcript=?,tags=?,words=?,read=?,starred=?,deleted=?,duration=? WHERE id=?",
                 (
                     a["body"],
                     a["text"],
@@ -1157,6 +1160,7 @@ class Core:
                     a["read"],
                     a["starred"],
                     a["deleted"],
+                    a["duration"],
                     article_id,
                 ),
             )
@@ -1725,7 +1729,7 @@ class Core:
                 for table in tables:
                     valid = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
                     for row in data[table]:
-                        if set(row) != valid:
+                        if not set(row) <= valid:  # Older backups may lack newer columns.
                             raise ValueError(f"Invalid {table} row.")
                         self.db.execute(
                             f"INSERT OR REPLACE INTO {table} ("

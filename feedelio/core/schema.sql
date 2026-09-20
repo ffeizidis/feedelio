@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS articles (
  read INTEGER NOT NULL DEFAULT 0, starred INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0,
  duplicate INTEGER NOT NULL DEFAULT 0, read_at TEXT, words INTEGER NOT NULL DEFAULT 0,
  fingerprint TEXT NOT NULL, extracted INTEGER NOT NULL DEFAULT 0, state_changed TEXT,
+ duration INTEGER NOT NULL DEFAULT 0,
  UNIQUE(feed_id, guid)
 );
 CREATE INDEX IF NOT EXISTS articles_feed ON articles(feed_id, published);

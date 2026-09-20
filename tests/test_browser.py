@@ -53,6 +53,8 @@ def test_desktop_reading_workflow(core, site, web_server):
         published="2020-01-01T00:00:00+00:00",
         tags=["paywall"],
     )
+    core.db.execute("UPDATE articles SET duration=60 WHERE guid='short'")
+    core.db.commit()
     errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -75,6 +77,14 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.locator(".row-title").click()
         expect(page.locator(".reading-content h1")).to_have_text("A slower and more thoughtful internet")
         page.get_by_role("button", name="esc to close", exact=True).click()
+        page.locator(".article-row", has_text="A sixty-second essay").locator(".row-title").click()
+        expect(page.locator(".article-details summary")).to_have_text("1:00 video")
+        page.get_by_role("button", name="Play video").click()  # One click: the player autoplays.
+        expect(page.locator(".video-box iframe")).to_have_attribute(
+            "src", "https://www.youtube-nocookie.com/embed/abcdefghijk?autoplay=1"
+        )
+        page.keyboard.press("Escape")
+        expect(page.locator(".video-box")).to_have_count(0)
         page.get_by_role("button", name="Manage library", exact=True).click()
         page.get_by_role("button", name="Appearance", exact=True).click()
         page.get_by_role("button", name="Dark", exact=True).click()
@@ -89,8 +99,11 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("combobox", name="Filter feeds by status").select_option("error")
         expect(page.locator(".feed-table .feed-info")).to_have_count(0)
         page.get_by_role("combobox", name="Filter feeds by status").select_option("all")
-        page.locator(".feed-info", has_text="The Sunday Journal").click()
+        expect(page.locator(".feed-info a", has_text=base + "/rss")).to_have_attribute("href", base + "/rss")
+        page.locator(".feed-open", has_text="The Sunday Journal").click()
         expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()
+        expect(page.locator(".feed-links a").first).to_have_attribute("href", base + "/rss")
+        expect(page.locator(".feed-links a").nth(1)).to_have_attribute("href", base)
         page.go_back()
         expect(page.locator(".feed-info", has_text="The Sunday Journal")).to_be_visible()
         page.get_by_role("button", name="Folders", exact=True).click()

@@ -337,7 +337,7 @@ def test_automatic_readability_and_provided_caption_track(lab):
 
 @pytest.mark.features(38)
 def test_configured_local_invidious_is_actually_loaded(lab):
-    lab.routes["/embed/abcdefghijk"] = (
+    lab.routes["/embed/abcdefghijk?autoplay=1"] = (
         200,
         {"Content-Type": "text/html"},
         "<html><body>Local privacy player</body></html>",

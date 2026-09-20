@@ -18,6 +18,7 @@
   --accent-line: oklch(0.7 0.19 var(--accent-hue) / 0.55);
   --gold: #d5b26a;
   --danger: oklch(0.7 0.16 25);
+  --healthy: oklch(0.72 0.15 150);
   --feed-lightness: initial;
   --feed-chroma: initial;
   --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -56,6 +57,7 @@
   --accent-line: oklch(0.52 0.19 var(--accent-hue) / 0.55);
   --gold: oklch(0.52 0.13 80);
   --danger: oklch(0.5 0.16 25);
+  --healthy: oklch(0.52 0.15 150);
   --feed-lightness: 0.49;
   --feed-chroma: 0.14;
   --on-green: #fff;
@@ -81,6 +83,7 @@
     --accent-line: oklch(0.52 0.19 var(--accent-hue) / 0.55);
     --gold: oklch(0.52 0.13 80);
     --danger: oklch(0.5 0.16 25);
+    --healthy: oklch(0.52 0.15 150);
     --feed-lightness: 0.49;
     --feed-chroma: 0.14;
     --on-green: #fff;

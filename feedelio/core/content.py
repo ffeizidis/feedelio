@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import socket
+import warnings
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -13,9 +14,12 @@ import nh3
 import regex
 import tinycss2
 import trafilatura
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 from .network import addresses, http_client
+
+# A body that is just a URL (some video descriptions) is parsed on purpose.
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 
 class UnresolvedHost(ValueError):

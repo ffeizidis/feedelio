@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import warnings
+from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -288,15 +289,43 @@ def probe_video(url, options=None):
     id = video_id(url)
     headers = {"User-Agent": (options or {}).get("user_agent") or "Feedelio/0.1 (+private feed reader)"}
     headers["Cookie"] = "SOCS=CAI"
-    duration = 0
+    video = dict(short=False, url=url, duration=0, title="", description="", author="", published=None)
     with http_client(options, timeout=30) as client:
         response = client.head(f"https://www.youtube.com/shorts/{id}", headers=headers)
-        short = response.status_code == 200
+        if response.status_code == 200:
+            video.update(short=True, url=f"https://www.youtube.com/shorts/{id}")
         page = client.get(f"https://www.youtube.com/watch?v={id}", headers=headers)
+        if page.status_code == 429 or page.status_code >= 500:
+            page.raise_for_status()  # Worth a retry later, unlike a private or removed video.
         if page.status_code == 200:
-            found = regex.search(r'itemprop="duration" content="([^"]+)"', page.text[:4_000_000])
-            duration = iso_duration(found.group(1)) if found else 0
-    return dict(short=short, url=f"https://www.youtube.com/shorts/{id}" if short else url, duration=duration)
+            video.update(watch_page_details(page.text[:4_000_000]))
+    return video
+
+
+def watch_page_details(text):
+    """What the archive keeps of a video: the page's schema.org metadata and player description."""
+    meta = {}  # The video's own name comes before the channel's.
+    for m in regex.finditer(r'<meta itemprop="(\w+)" content="([^"]*)"', text):
+        meta.setdefault(m.group(1), html.unescape(m.group(2)))
+    strings = {}
+    for key in ("shortDescription", "author"):
+        found = regex.search(r'"' + key + r'":("(?:[^"\\]|\\.)*")', text)
+        strings[key] = json.loads(found.group(1)) if found else ""
+    return dict(
+        duration=iso_duration(meta.get("duration")),
+        title=meta.get("name", ""),
+        description=strings["shortDescription"],
+        author=strings["author"],
+        published=utc(meta.get("datePublished")),
+    )
+
+
+def utc(stamp):
+    """An ISO timestamp with any offset, stored the way the rest of the archive sorts: in UTC."""
+    try:
+        return datetime.fromisoformat(stamp).astimezone(timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        return None
 
 
 def iso_duration(value):

@@ -2810,9 +2810,10 @@ function FeedEditor({ feed: f, data, act, onBack }) {
       <p className="muted">
         Last checked:{" "}
         {f.checked ? new Date(f.checked).toLocaleString() : "Not yet"}. Backfill
-        automatically discovers exposed history (including Substack archives),
-        or uses your saved archive feed URL. One archive request per minute;
-        progress and pause/resume are shown above these settings.
+        automatically discovers exposed history (including Substack archives and
+        YouTube channel pages), or uses your saved archive feed URL. One archive
+        request per minute; progress and pause/resume are shown above these
+        settings.
       </p>
     </form>
   );

@@ -79,9 +79,8 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("button", name="esc to close", exact=True).click()
         page.locator(".article-row", has_text="A sixty-second essay").locator(".row-title").click()
         expect(page.locator(".article-details summary")).to_have_text("1:00 video")
-        page.get_by_role("button", name="Play video").click()  # One click: the player autoplays.
-        expect(page.locator(".video-box iframe")).to_have_attribute(
-            "src", "https://www.youtube-nocookie.com/embed/abcdefghijk?autoplay=1"
+        expect(page.locator(".video-box iframe")).to_have_attribute(  # No click-to-load step.
+            "src", "https://www.youtube-nocookie.com/embed/abcdefghijk"
         )
         page.keyboard.press("Escape")
         expect(page.locator(".video-box")).to_have_count(0)
@@ -99,7 +98,7 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("combobox", name="Filter feeds by status").select_option("error")
         expect(page.locator(".feed-table .feed-info")).to_have_count(0)
         page.get_by_role("combobox", name="Filter feeds by status").select_option("all")
-        expect(page.locator(".feed-info a", has_text=base + "/rss")).to_have_attribute("href", base + "/rss")
+        expect(page.locator(".feed-info a", has_text=base)).to_have_attribute("href", base)
         page.locator(".feed-open", has_text="The Sunday Journal").click()
         expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()
         expect(page.locator(".feed-links a").first).to_have_attribute("href", base + "/rss")

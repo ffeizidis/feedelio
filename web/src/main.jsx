@@ -38,7 +38,6 @@ import {
   CheckCircle2,
   MoreHorizontal,
   Headphones,
-  Play,
   FileText,
   ShieldCheck,
   SlidersHorizontal,
@@ -345,7 +344,6 @@ function App() {
   const [toast, setToast] = useState(null),
     [busy, setBusy] = useState(0),
     [loadImages, setLoadImages] = useState(false),
-    [playVideo, setPlayVideo] = useState(!!resume.playVideo),
     [reloadPolicy, setReloadPolicy] = useState(false);
   const [token, setToken] = useState("");
   const [paneWidth, setPaneWidth] = useState(null);
@@ -450,7 +448,6 @@ function App() {
     setSelected(item.id);
     setFocused(item.id);
     setLoadImages(false);
-    setPlayVideo(false);
     run("change_articles", { ids: [item.id], read: true, opened: true });
   }
   function navigate(delta) {
@@ -502,7 +499,7 @@ function App() {
       try {
         sessionStorage.setItem(
           "feedelio-policy-resume",
-          JSON.stringify({ view, scope, q, offset, selected, playVideo }),
+          JSON.stringify({ view, scope, q, offset, selected }),
         );
       } catch {
         /* Reload remains safe without storage. */
@@ -1322,26 +1319,13 @@ function App() {
                   <hr className="reader-rule" />
                   {a.embed && (
                     <div className="video-box">
-                      {playVideo ? (
-                        <iframe
-                          title={a.title}
-                          src={a.embed + "?autoplay=1"}
-                          allow="autoplay; fullscreen; picture-in-picture"
-                          allowFullScreen
-                          referrerPolicy="strict-origin-when-cross-origin"
-                        />
-                      ) : (
-                        <button onClick={() => setPlayVideo(true)}>
-                          <Play size={30} />
-                          <span>Play video</span>
-                          <small>
-                            {settings.invidious
-                              ? "Via your Invidious instance"
-                              : "Via youtube-nocookie.com"}{" "}
-                            · Loads on click
-                          </small>
-                        </button>
-                      )}
+                      <iframe
+                        title={a.title}
+                        src={a.embed}
+                        allow="fullscreen; picture-in-picture"
+                        allowFullScreen
+                        referrerPolicy="strict-origin-when-cross-origin"
+                      />
                     </div>
                   )}
                   {a.enclosures
@@ -2139,11 +2123,11 @@ function Library({
                                 </button>
                                 <small>
                                   <a
-                                    href={f.url}
+                                    href={f.site_url || f.url}
                                     target="_blank"
                                     rel="noreferrer"
                                   >
-                                    {f.url}
+                                    {f.site_url || f.url}
                                   </a>
                                 </small>
                               </span>

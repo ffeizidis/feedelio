@@ -781,7 +781,7 @@ dialog::backdrop {
 }
 .stat-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 15px;
   margin-bottom: 30px;
 }
@@ -822,6 +822,32 @@ dialog::backdrop {
   font-size: 13px;
   margin: 10px 0;
   color: var(--muted);
+}
+.context-menu {
+  position: fixed;
+  z-index: 90;
+  min-width: 190px;
+  padding: 5px;
+  background: var(--raised);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px #0005;
+}
+.context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 14px;
+  text-align: left;
+  color: var(--ink);
+}
+.context-menu button:hover,
+.context-menu button:focus-visible {
+  background: var(--hover);
+  outline: none;
 }
 .toast {
   position: fixed;

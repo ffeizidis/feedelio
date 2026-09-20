@@ -116,6 +116,27 @@ const fullDate = (value) =>
     day: "numeric",
     year: "numeric",
   });
+function useLayer(layers, name, open) {
+  useEffect(() => {
+    const { stack } = layers.current;
+    if (open && !stack.includes(name)) {
+      stack.push(name);
+      history.pushState({ feedelio: name }, "");
+    } else if (!open && stack.at(-1) === name) {
+      stack.pop();
+      if (history.state?.feedelio === name) {
+        layers.current.skip = true; // Our own back must not close the next layer.
+        history.back();
+      }
+    }
+  }, [open]);
+}
+function fileSize(bytes) {
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  for (; bytes >= 1024 && i < units.length - 1; i++) bytes /= 1024;
+  return `${bytes < 10 && i ? bytes.toFixed(1) : Math.round(bytes)} ${units[i]}`;
+}
 function elapsed(value) {
   if (!value) return "never";
   const minutes = Math.max(0, (Date.now() - new Date(value).getTime()) / 60000);
@@ -272,6 +293,8 @@ function App() {
         ? "subscribe"
         : null,
     );
+  const [manageFeed, setManageFeed] = useState(null),
+    [menu, setMenu] = useState(null);
   const [toast, setToast] = useState(null),
     [busy, setBusy] = useState(0),
     [loadImages, setLoadImages] = useState(false),
@@ -289,6 +312,21 @@ function App() {
     const resize = () => setViewport(window.innerWidth);
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
+  }, []);
+  // The reader and the library each push a history entry, so Back (keyboard,
+  // toolbar or a mouse side button) closes them instead of leaving Feedelio.
+  const layers = useRef({ stack: [], skip: false });
+  useLayer(layers, "article", !!selected);
+  useLayer(layers, "modal", !!modal);
+  useEffect(() => {
+    const pop = () => {
+      const state = layers.current;
+      if (state.skip) state.skip = false;
+      else if (state.stack.pop() === "modal") setModal(null);
+      else setSelected(null);
+    };
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
   }, []);
   const searchRef = useRef(null),
     readingRef = useRef(null),
@@ -706,6 +744,10 @@ function App() {
                     }
                     style={{ paddingLeft: 41 + depth * 14 }}
                     onClick={() => stream("all", { feed_id: f.id })}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({ feed: f, x: e.clientX, y: e.clientY });
+                    }}
                   >
                     <i className="hue-dot" />
                     <span>{f.title}</span>
@@ -1438,14 +1480,94 @@ function App() {
       ].includes(modal) && (
         <Library
           initial={modal}
+          initialFeed={manageFeed}
           pref={pref}
           data={data}
           act={act}
-          onClose={() => setModal(null)}
+          onClose={() => {
+            setModal(null);
+            setManageFeed(null);
+          }}
           onSubscribe={() => setModal("subscribe")}
         />
       )}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          label={menu.feed.title}
+          onClose={() => setMenu(null)}
+          items={[
+            {
+              icon: Settings2,
+              label: "Manage feed",
+              run: () => {
+                setManageFeed(menu.feed.id);
+                setModal("feeds");
+              },
+            },
+            {
+              icon: RefreshCw,
+              label: "Refresh feed",
+              run: () =>
+                run(
+                  "enqueue",
+                  { kind: "refresh", payload: { feed_id: menu.feed.id } },
+                  "Refresh queued",
+                ),
+            },
+            {
+              icon: CheckCheck,
+              label: "Mark feed as read",
+              run: () =>
+                run(
+                  "mark_all",
+                  { feed_id: menu.feed.id },
+                  "Feed marked as read · Z to undo",
+                ),
+            },
+          ]}
+        />
+      )}
     </main>
+  );
+}
+
+function ContextMenu({ x, y, label, items, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    // Keep the menu inside the viewport, then focus it so Escape and outside
+    // clicks close it like a native menu.
+    const box = el.getBoundingClientRect();
+    el.style.left = Math.min(x, window.innerWidth - box.width - 8) + "px";
+    el.style.top = Math.min(y, window.innerHeight - box.height - 8) + "px";
+    el.querySelector("button")?.focus();
+    const away = (e) => !el.contains(e.target) && onClose();
+    const key = (e) => e.key === "Escape" && onClose();
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", key);
+    };
+  }, []);
+  return (
+    <div ref={ref} className="context-menu" role="menu" aria-label={label}>
+      {items.map(({ icon: Icon, label, run }) => (
+        <button
+          key={label}
+          role="menuitem"
+          onClick={() => {
+            onClose();
+            run();
+          }}
+        >
+          <Icon size={14} />
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -1693,10 +1815,20 @@ function Subscribe({ data, act, onClose }) {
   );
 }
 
-function Library({ initial, data, act, pref, onClose, onSubscribe }) {
+function Library({
+  initial,
+  initialFeed,
+  data,
+  act,
+  pref,
+  onClose,
+  onSubscribe,
+}) {
   const [tab, setTab] = useState(initial),
     [ids, setIds] = useState([]),
-    [edit, setEdit] = useState(null),
+    [edit, setEdit] = useState(
+      () => data.feeds.find((f) => f.id === initialFeed) || null,
+    ),
     [error, setError] = useState("");
   const [folderSheet, setFolderSheet] = useState(null);
   const settingsSections = {
@@ -2267,6 +2399,15 @@ function Library({ initial, data, act, pref, onClose, onSubscribe }) {
                     <div>
                       <strong>{stats.data.totals.saved}</strong>
                       <span>Saved for later</span>
+                    </div>
+                    <div>
+                      <strong>{fileSize(stats.data.archive.bytes)}</strong>
+                      <span>
+                        Archive size · {stats.data.totals.articles} articles
+                        {stats.data.archive.downloads
+                          ? `, ${stats.data.archive.downloads} downloads`
+                          : ""}
+                      </span>
                     </div>
                   </div>
                   <h3>Where your attention goes</h3>

@@ -171,6 +171,7 @@ def test_settings_search_folders_and_design_screens(lab):
     p.screenshot(path=str(output / "new-folder.png"))
     p.get_by_role("button", name="Create folder", exact=True).click()
     expect(p.locator(".folder-group-heading").filter(has_text="New notes")).to_be_visible()
+    p.get_by_role("button", name="Expand Unfiled").click()
     source = p.locator(".folder-child").filter(has_text="Craft & Method")
     dest = p.locator(".folder-group-heading").filter(has_text="New notes")
     source.drag_to(dest)

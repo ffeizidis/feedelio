@@ -819,6 +819,7 @@ function App() {
           </div>
           {!collapsed["nav" + f.id] && (
             <>
+              {folderTree(f.id, depth + 1)}
               {data.feeds
                 .filter((x) => x.folder_id === f.id && shown(x))
                 .map((f) => (
@@ -843,7 +844,6 @@ function App() {
                     </span>
                   </button>
                 ))}
-              {folderTree(f.id, depth + 1)}
             </>
           )}
         </React.Fragment>

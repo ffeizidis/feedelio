@@ -534,7 +534,7 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
 }
 
 export function FolderManager({ data, act, onEdit, onNew }) {
-  const [closed, setClosed] = useState({}),
+  const [opened, setOpened] = useState({}),
     [dragged, setDragged] = useState(null),
     [error, setError] = useState("");
   async function move(feed, folder) {
@@ -592,10 +592,10 @@ export function FolderManager({ data, act, onEdit, onNew }) {
               }}
             >
               <button
-                aria-label={`${closed[f.id] ? "Expand" : "Collapse"} ${f.name}`}
-                onClick={() => setClosed({ ...closed, [f.id]: !closed[f.id] })}
+                aria-label={`${opened[f.id] ? "Collapse" : "Expand"} ${f.name}`}
+                onClick={() => setOpened({ ...opened, [f.id]: !opened[f.id] })}
               >
-                {closed[f.id] ? "▸" : "▾"}
+                {opened[f.id] ? "▾" : "▸"}
               </button>
               <span>{f.name}</span>
               <small>
@@ -612,8 +612,9 @@ export function FolderManager({ data, act, onEdit, onNew }) {
                 </button>
               )}
             </div>
-            {!closed[f.id] && (
+            {opened[f.id] && (
               <>
+                <div className="folder-nested">{tree(f.id)}</div>
                 {feeds.map((feed) => (
                   <div
                     draggable
@@ -651,7 +652,6 @@ export function FolderManager({ data, act, onEdit, onNew }) {
                     )}
                   </div>
                 ))}
-                <div className="folder-nested">{tree(f.id)}</div>
               </>
             )}
           </section>

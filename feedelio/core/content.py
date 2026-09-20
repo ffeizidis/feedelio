@@ -243,4 +243,37 @@ def embed_url(url, invidious=""):
 
 
 def text_html(text):
-    return "<p>" + html.escape(text).replace("\n", "<br>") + "</p>"
+    """Plain text (a video description, a text/plain summary) as readable HTML."""
+    paragraphs = []
+    for block in regex.split(r"\n\s*\n", text.strip()):
+        escaped = regex.sub(
+            r"https?://[^\s<>\"']+", lambda m: f'<a href="{m.group(0)}">{m.group(0)}</a>', html.escape(block)
+        )
+        paragraphs.append("<p>" + escaped.replace("\n", "<br>") + "</p>")
+    return "".join(paragraphs)
+
+
+def looks_like_html(body):
+    return bool(regex.search(r"<[a-zA-Z][^>]*>", body or ""))
+
+
+def video_id(url):
+    embed = embed_url(url)
+    return embed.rsplit("/", 1)[1] if embed else None
+
+
+def probe_video(url, options=None):
+    """Classify a YouTube link without loading the page.
+
+    Watch pages served to a feed reader are consent interstitials, so a page
+    extraction would replace the video with cookie boilerplate. YouTube answers
+    /shorts/<id> with 200 for a Short and redirects to /watch for everything
+    else; the SOCS cookie declines the consent prompt.
+    """
+    id = video_id(url)
+    headers = {"User-Agent": (options or {}).get("user_agent") or "Feedelio/0.1 (+private feed reader)"}
+    headers["Cookie"] = "SOCS=CAI"
+    with http_client(options, timeout=30) as client:
+        response = client.head(f"https://www.youtube.com/shorts/{id}", headers=headers)
+    short = response.status_code == 200
+    return dict(short=short, url=f"https://www.youtube.com/shorts/{id}" if short else url)

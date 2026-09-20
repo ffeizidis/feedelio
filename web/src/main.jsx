@@ -30,7 +30,6 @@ import {
   Moon,
   Monitor,
   Type,
-  Keyboard,
   ArrowUpRight,
   Trash2,
   Download,
@@ -46,6 +45,11 @@ import {
   Inbox,
   AlertCircle,
   Leaf,
+  Lock,
+  Smartphone,
+  Video,
+  Eye,
+  EyeOff,
   Image,
   Loader2,
 } from "lucide-react";
@@ -116,20 +120,27 @@ const fullDate = (value) =>
     day: "numeric",
     year: "numeric",
   });
-function useLayer(layers, name, open) {
+// Each open layer (article, library, feed editor) owns one history entry, so
+// Back closes the top layer. The stack is the source of truth; history.go on
+// our own closes is absorbed by the skip counter in the popstate handler.
+function useLayer(layers, name, open, onClose) {
+  layers.current.close[name] = onClose;
   useEffect(() => {
-    const { stack } = layers.current;
-    if (open && !stack.includes(name)) {
-      stack.push(name);
+    const state = layers.current;
+    if (open && !state.stack.includes(name)) {
+      state.stack.push(name);
       history.pushState({ feedelio: name }, "");
-    } else if (!open && stack.at(-1) === name) {
-      stack.pop();
-      if (history.state?.feedelio === name) {
-        layers.current.skip = true; // Our own back must not close the next layer.
-        history.back();
-      }
-    }
+    } else if (!open) closeLayer(state, name);
   }, [open]);
+  useEffect(() => () => closeLayer(layers.current, name), []);
+}
+function closeLayer(state, name) {
+  const index = state.stack.indexOf(name);
+  if (index < 0) return;
+  const depth = state.stack.length - index;
+  state.stack.splice(index);
+  state.skip += depth;
+  history.go(-depth);
 }
 function fileSize(bytes) {
   const units = ["B", "KB", "MB", "GB"];
@@ -153,6 +164,7 @@ function elapsed(value) {
 function feedIssue(f) {
   if (f.error)
     return {
+      kind: "error",
       label: `failed ${elapsed(f.checked)}`,
       note: `${f.failures} failed fetches: ${f.error}`,
     };
@@ -161,15 +173,43 @@ function feedIssue(f) {
     14 * 86400000
   )
     return {
+      kind: "stale",
       label: `stale ${elapsed(f.last_article || f.created)}`,
       note: "No new items in 14 days or more",
     };
   if (f.partial_items)
     return {
+      kind: "partial",
       label: "partial",
       note: `${f.partial_items} articles are paywalled or archive previews; full text may need a subscription`,
     };
   return null;
+}
+const feedStatuses = {
+  all: "All feeds",
+  healthy: "Healthy",
+  error: "Failing",
+  stale: "Stale",
+  partial: "Partial",
+};
+// Small marks in the article list: what kind of item this is before opening it.
+function ArticleMarks({ item }) {
+  const url = item.url || "";
+  const video =
+    /^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch|shorts|embed)|youtu\.be\/)/.test(
+      url,
+    );
+  const short =
+    item.tags.includes("short") || /youtube\.com\/shorts\//.test(url);
+  const paywall = item.tags.includes("paywall");
+  if (!video && !paywall) return null;
+  return (
+    <span className="row-marks">
+      {video && short && <Smartphone size={12} aria-label="YouTube Short" />}
+      {video && !short && <Video size={12} aria-label="Video" />}
+      {paywall && <Lock size={12} aria-label="Paywalled" />}
+    </span>
+  );
 }
 function IconButton({ icon: Icon, label, ...props }) {
   return (
@@ -314,15 +354,14 @@ function App() {
   }, []);
   // The reader and the library each push a history entry, so Back (keyboard,
   // toolbar or a mouse side button) closes them instead of leaving Feedelio.
-  const layers = useRef({ stack: [], skip: false });
-  useLayer(layers, "article", !!selected);
-  useLayer(layers, "modal", !!modal);
+  const layers = useRef({ stack: [], skip: 0, close: {} });
+  useLayer(layers, "article", !!selected, () => setSelected(null));
+  useLayer(layers, "modal", !!modal, () => setModal(null));
   useEffect(() => {
     const pop = () => {
       const state = layers.current;
-      if (state.skip) state.skip = false;
-      else if (state.stack.pop() === "modal") setModal(null);
-      else setSelected(null);
+      if (state.skip) state.skip--;
+      else state.close[state.stack.pop()]?.();
     };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
@@ -694,9 +733,23 @@ function App() {
       Math.max(300, viewport - sidebarSize - 300),
     ),
   );
+  // Unread-only hides caught-up feeds and folders, but never the one being read.
+  const unreadOnly = !!settings.sidebar_unread_only,
+    keep = new Set([scope.folder_id]);
+  for (
+    let id = data.feeds.find((f) => f.id === scope.feed_id)?.folder_id;
+    id;
+    id = data.folders.find((f) => f.id === id)?.parent_id
+  )
+    keep.add(id);
+  const shown = (f) => !unreadOnly || f.unread > 0 || scope.feed_id === f.id;
   const folderTree = (parent = null, depth = 0) =>
     data.folders
-      .filter((f) => f.parent_id === parent)
+      .filter(
+        (f) =>
+          f.parent_id === parent &&
+          (!unreadOnly || f.unread > 0 || keep.has(f.id)),
+      )
       .map((f) => (
         <React.Fragment key={f.id}>
           <div
@@ -734,7 +787,7 @@ function App() {
           {!collapsed["nav" + f.id] && (
             <>
               {data.feeds
-                .filter((x) => x.folder_id === f.id)
+                .filter((x) => x.folder_id === f.id && shown(x))
                 .map((f) => (
                   <button
                     key={f.id}
@@ -818,6 +871,10 @@ function App() {
                 )}
               </button>
             ))}
+            <button onClick={() => setModal("feeds")}>
+              <Settings2 size={16} />
+              <span>Manage library</span>
+            </button>
           </nav>
           <div className="subscriptions-heading">
             <button
@@ -832,6 +889,18 @@ function App() {
               FEEDS
             </button>
             <div>
+              <IconButton
+                icon={settings.sidebar_unread_only ? EyeOff : Eye}
+                label={
+                  settings.sidebar_unread_only
+                    ? "Show all feeds"
+                    : "Show only feeds with unread articles"
+                }
+                aria-pressed={!!settings.sidebar_unread_only}
+                onClick={() =>
+                  pref("sidebar_unread_only", !settings.sidebar_unread_only)
+                }
+              />
               <IconButton
                 icon={FolderPlus}
                 label="New folder"
@@ -859,32 +928,6 @@ function App() {
             </div>
           )}
         </div>
-        <footer className="sidebar-footer">
-          <button onClick={() => setModal("feeds")}>
-            <Settings2 size={16} />
-            Manage library
-          </button>
-          <div>
-            <span
-              className={
-                "status-dot " +
-                (data.jobs.some((j) => j.status === "running") ? "working" : "")
-              }
-            />
-            <span>
-              {busy
-                ? "Saving…"
-                : data.jobs.some((j) => j.status === "running")
-                  ? "Updating"
-                  : "Your private library"}
-            </span>
-            <IconButton
-              icon={Keyboard}
-              label="Keyboard shortcuts (?)"
-              onClick={() => setModal("keys")}
-            />
-          </div>
-        </footer>
       </aside>
       <section className="stream-pane" aria-label="Article stream">
         <ResizeHandle
@@ -1123,6 +1166,7 @@ function App() {
                   </button>
                 )}
                 <button className="row-title" onClick={() => openTitle(item)}>
+                  <ArticleMarks item={item} />
                   <Highlight text={item.title} query={q} />
                 </button>
                 <time className="row-date" dateTime={item.published}>
@@ -1275,7 +1319,7 @@ function App() {
                           src={a.embed}
                           allow="fullscreen; picture-in-picture"
                           allowFullScreen
-                          referrerPolicy="no-referrer"
+                          referrerPolicy="strict-origin-when-cross-origin"
                         />
                       ) : (
                         <button onClick={() => setPlayVideo(true)}>
@@ -1526,6 +1570,7 @@ function App() {
         <Library
           initial={modal}
           initialFeed={manageFeed}
+          layers={layers}
           pref={pref}
           data={data}
           act={act}
@@ -1787,6 +1832,7 @@ function Subscribe({ data, act, onClose }) {
 function Library({
   initial,
   initialFeed,
+  layers,
   data,
   act,
   pref,
@@ -1798,8 +1844,17 @@ function Library({
     [edit, setEdit] = useState(
       () => data.feeds.find((f) => f.id === initialFeed) || null,
     ),
+    [status, setStatus] = useState("all"),
+    [fromList, setFromList] = useState(false),
     [error, setError] = useState("");
   const [folderSheet, setFolderSheet] = useState(null);
+  // A feed opened from the list is a layer, so Back returns to the list; one
+  // opened from the stream heading is not, so Back leaves the library.
+  useLayer(layers, "feed", !!edit && fromList, () => setEdit(null));
+  const openFeed = (f) => {
+    setFromList(true);
+    setEdit(f);
+  };
   const settingsSections = {
     feeds: "Feeds",
     folders: "Folders",
@@ -1930,6 +1985,19 @@ function Library({
                         ? `refreshed ${elapsed(lastRefreshed)} ago`
                         : "not refreshed yet"}
                     </span>
+                    <select
+                      aria-label="Filter feeds by status"
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value)}
+                    >
+                      {Object.entries(feedStatuses).map(([id, label]) => (
+                        <option key={id} value={id}>
+                          {label}
+                          {id !== "all" &&
+                            ` (${data.feeds.filter((f) => (feedIssue(f)?.kind || "healthy") === id).length})`}
+                        </option>
+                      ))}
+                    </select>
                     <button className="primary" onClick={onSubscribe}>
                       <Plus size={15} />
                       Add feed
@@ -2030,64 +2098,72 @@ function Library({
                       <span />
                       <span />
                     </div>
-                    {data.feeds.map((f) => (
-                      <div key={f.id} className={feedClass(f)}>
-                        <div className="feed-cell">
-                          <input
-                            type="checkbox"
-                            aria-label={"Select " + f.title}
-                            checked={ids.includes(f.id)}
-                            onChange={(e) =>
-                              setIds(
-                                e.target.checked
-                                  ? [...ids, f.id]
-                                  : ids.filter((id) => id !== f.id),
-                              )
-                            }
-                          />
-                          <button
-                            className="feed-info"
-                            onClick={() => setEdit(f)}
-                          >
-                            <i className="hue-dot" />
-                            <span>
-                              <strong>{f.title}</strong>
-                              <small>{f.url}</small>
-                            </span>
-                          </button>
-                        </div>
-                        <span className="feed-folder">
-                          {f.folder_id === "inbox"
-                            ? "—"
-                            : data.folders.find((x) => x.id === f.folder_id)
-                                ?.name}
-                        </span>
-                        <span className="feed-unread">{f.unread}</span>
-                        <span
-                          className={
-                            "feed-updated " + (feedIssue(f) ? "issue" : "")
-                          }
-                        >
-                          {feedIssue(f)?.label || elapsed(f.checked)}
-                        </span>
-                        <span>
-                          {feedIssue(f) && (
-                            <span
-                              className="feed-issue"
-                              title={feedIssue(f).note}
-                              aria-label={feedIssue(f).note}
+                    {data.feeds
+                      .filter(
+                        (f) =>
+                          status === "all" ||
+                          (feedIssue(f)?.kind || "healthy") === status,
+                      )
+                      .map((f) => (
+                        <div key={f.id} className={feedClass(f)}>
+                          <div className="feed-cell">
+                            <input
+                              type="checkbox"
+                              aria-label={"Select " + f.title}
+                              checked={ids.includes(f.id)}
+                              onChange={(e) =>
+                                setIds(
+                                  e.target.checked
+                                    ? [...ids, f.id]
+                                    : ids.filter((id) => id !== f.id),
+                                )
+                              }
+                            />
+                            <button
+                              className="feed-info"
+                              onClick={() => openFeed(f)}
                             >
-                              !
-                            </span>
-                          )}
-                        </span>
-                        <IconButton
-                          icon={MoreHorizontal}
-                          label={"Edit " + f.title}
-                          onClick={() => setEdit(f)}
-                        />
-                      </div>
-                    ))}
+                              <i className="hue-dot" />
+                              <span>
+                                <strong>{f.title}</strong>
+                                <small>{f.url}</small>
+                              </span>
+                            </button>
+                          </div>
+                          <span className="feed-folder">
+                            {f.folder_id === "inbox"
+                              ? "—"
+                              : data.folders.find((x) => x.id === f.folder_id)
+                                  ?.name}
+                          </span>
+                          <span className="feed-unread">{f.unread}</span>
+                          <span
+                            className={
+                              "feed-updated " +
+                              (feedIssue(f)?.kind ||
+                                (f.checked ? "healthy" : ""))
+                            }
+                          >
+                            {feedIssue(f)?.label || elapsed(f.checked)}
+                          </span>
+                          <span>
+                            {feedIssue(f) && (
+                              <span
+                                className={"feed-issue " + feedIssue(f).kind}
+                                title={feedIssue(f).note}
+                                aria-label={feedIssue(f).note}
+                              >
+                                !
+                              </span>
+                            )}
+                          </span>
+                          <IconButton
+                            icon={MoreHorizontal}
+                            label={"Edit " + f.title}
+                            onClick={() => openFeed(f)}
+                          />
+                        </div>
+                      ))}
                   </div>
                   {!data.feeds.length && (
                     <div className="list-empty">

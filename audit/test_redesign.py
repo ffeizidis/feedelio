@@ -71,7 +71,6 @@ def test_feed_list_omits_repeated_source_and_sidebar_is_larger(lab):
         (".feed-line", 17),
         (".folder-line > button:not(.disclosure)", 16),
         (".search-trigger", 16),
-        (".sidebar-footer > button", 16),
     ]:
         assert p.locator(selector).first.evaluate("e=>parseFloat(getComputedStyle(e).fontSize)") == size
     icon_url = p.locator('link[rel="icon"]').get_attribute("href")

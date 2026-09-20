@@ -43,6 +43,19 @@ def test_discovery_follows_page_links_and_robots_allow_lines(core, site):
     assert core.discover(base + "/")[0]["url"] == base + "/feeds/global.xml"
 
 
+def test_malformed_xml_keeps_what_the_loose_parser_recovers(core, site):
+    base, routes, _ = site
+    status, headers, body = routes["/rss"]
+    routes["/rss"] = (status, headers, body.replace("thoughtful", "thoughtful &nbsp; unclosed <b>"))
+    id = core.subscribe(base + "/rss")["id"]
+    assert core.refresh(id) == {"new": 1}
+    assert core.feeds()[0]["error"] is None
+    assert "unclosed" in core.articles()["items"][0]["title"]
+    routes["/rss"] = (status, {"Content-Type": headers["Content-Type"]}, "<html><p>Not XML at all")
+    with pytest.raises(Exception, match="error while parsing feed"):
+        core.refresh(id)
+
+
 @pytest.mark.parametrize(
     "invalid",
     [

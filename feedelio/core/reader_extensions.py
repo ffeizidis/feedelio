@@ -5,6 +5,7 @@ are internal. Feedparser still does all RSS/Atom parsing and normalization.
 """
 
 import io
+from xml.sax import SAXParseException
 
 from reader._parser.feedparser import FeedparserParser, _process_feed, feedparser
 
@@ -19,6 +20,10 @@ class ExtendedFeedparser(FeedparserParser):
             sanitize_html=True,
             response_headers={k.lower(): v for k, v in (headers or {}).items()},
         )
+        # A stray entity or unclosed tag makes feedparser fall back to its loose
+        # parser; keep what it recovered instead of failing the whole feed.
+        if isinstance(result.get("bozo_exception"), SAXParseException) and result.version and result.entries:
+            result["bozo"] = 0
         for entry in result.entries:
             if not entry.get("id") and not entry.get("link"):
                 entry["id"] = fingerprint(entry.get("title", ""), entry.get("summary", ""))

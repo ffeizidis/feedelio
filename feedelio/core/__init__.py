@@ -47,6 +47,7 @@ from .content import (
     probe_video,
     request_options,
     safe_url,
+    same_feed,
     sanitize,
     text_html,
     video_id,
@@ -449,7 +450,11 @@ class Core:
         options = self.validate_options(options or {})
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            existing = self.rows("SELECT title FROM feeds WHERE url=? AND deleted=0", (url,))
+            existing = [
+                f
+                for f in self.rows("SELECT url,title FROM feeds WHERE deleted=0")
+                if same_feed(f["url"], url)
+            ]
             if existing:
                 raise ValueError(f"Already subscribed to this feed as {existing[0]['title']}.")
             return self._subscribe(url, folder_id, title, options)
@@ -610,11 +615,12 @@ class Core:
             where.append("EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value=?)")
             args.append(tag)
         if q.strip():
-            # Literal tokens make punctuation and user input safe FTS queries.
+            # Literal tokens make punctuation and user input safe FTS queries;
+            # each one matches as a prefix, so a query finds words as they are typed.
             terms = regex.findall(r"[\p{L}\p{N}_]+", q)[:30]
             if terms:
                 where.append("a.rowid IN (SELECT rowid FROM article_search WHERE article_search MATCH ?)")
-                match = " AND ".join('"' + t + '"' for t in terms)
+                match = " AND ".join('"' + t + '"*' for t in terms)
                 args.append("title : (" + match + ")" if titles_only else match)
             else:
                 where.append("0")

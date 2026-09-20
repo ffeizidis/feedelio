@@ -48,6 +48,7 @@ def test_feed_hues_persist_across_rename_delete_restore_and_legacy(core, site):
     core.undo(deletion["undo"])
     with core.db:
         core.db.execute("UPDATE feeds SET options=json_remove(options,'$.hue') WHERE id=?", (first,))
+    Core.initialised.discard(core.root)  # Migrations run once per process; simulate a restart.
     with Core(core.root) as migrated:
         assert next(f for f in migrated.feeds() if f["id"] == first)["options"]["hue"] == 0
     assert next(f for f in core.feeds() if f["id"] == second)["options"]["hue"] == 1

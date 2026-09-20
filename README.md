@@ -8,7 +8,7 @@ A private, single-user, keyboard-first desktop RSS reader. Three persistent pane
 docker compose up --build -d
 ```
 
-Open **http://localhost:8000** — no login is required in the default local Docker configuration. Keep its port bound to localhost. Import your Inoreader OPML under **Manage library → Import & export**, or press **a** to add a feed. Feeds whose host no longer resolves are still imported and show a refresh error, so one dead blog never blocks a large export. After an import, refreshes take priority over the queued full-article extractions and archive pages, so new posts keep arriving while the backlog drains. The library starts empty; no sample subscriptions are added.
+Open **http://localhost:8000** — no login is required in the default local Docker configuration. Keep its port bound to localhost. Import your Inoreader OPML under **Manage library → Import & export**, or press **a** to add a feed. Feeds whose host no longer resolves are still imported and show a refresh error, so one dead blog never blocks a large export. After an import, refreshes take priority over the queued full-article extractions and archive pages, so new posts keep arriving while the backlog drains. A publisher that rate-limits a burst of extractions (HTTP 429) gets a later retry rather than a lost article. The library starts empty; no sample subscriptions are added.
 
 Without the Compose plugin:
 

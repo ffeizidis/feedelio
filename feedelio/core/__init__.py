@@ -96,6 +96,25 @@ def record(row):
     return result
 
 
+def retry_at(exc, attempts):
+    """When to retry after a publisher pushed back: exponential, or its Retry-After."""
+    from email.utils import parsedate_to_datetime
+
+    delay = min(3600, 60 * 2 ** min(attempts, 6))
+    response = getattr(exc, "response", None)
+    retry_after = response.headers.get("Retry-After", "") if response is not None else ""
+    try:
+        delay = max(delay, int(retry_after))
+    except ValueError:
+        try:
+            delay = max(
+                delay, (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds()
+            )
+        except (ValueError, TypeError, OverflowError):
+            pass
+    return datetime.now(timezone.utc) + timedelta(seconds=delay)
+
+
 class GuardAdapter(PinnedAdapter):
     def __init__(self, cookie_origin=None):
         self.cookie_origin = cookie_origin
@@ -1339,10 +1358,7 @@ class Core:
             status = "queued" if state["next_url"] or state["pending"] else "done"
             error = None
         except Exception as exc:
-            from email.utils import parsedate_to_datetime
-
             state["attempts"] = state.get("attempts", 0) + 1
-            delay = min(3600, 60 * 2 ** min(state["attempts"], 6))
             response = getattr(exc, "response", None)
             code = response.status_code if response is not None else None
             retry = (
@@ -1351,18 +1367,7 @@ class Core:
                 or isinstance(exc, requests.ConnectionError)
                 or isinstance(exc, requests.Timeout)
             )
-            retry_after = response.headers.get("Retry-After", "") if response is not None else ""
-            try:
-                delay = max(delay, int(retry_after))
-            except ValueError:
-                try:
-                    delay = max(
-                        delay,
-                        (parsedate_to_datetime(retry_after) - datetime.now(timezone.utc)).total_seconds(),
-                    )
-                except (ValueError, TypeError, OverflowError):
-                    pass
-            state["not_before"] = (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
+            state["not_before"] = retry_at(exc, state["attempts"]).isoformat()
             status = "queued" if retry and state["attempts"] < 5 else "failed"
             error = str(exc)[:1000]
         with self.db:
@@ -1450,10 +1455,10 @@ class Core:
             # the extraction backlog.
             jobs = self.rows(
                 """
-                SELECT * FROM jobs j WHERE status='queued' AND (
+                SELECT * FROM jobs j WHERE status='queued'
+                AND coalesce(json_extract(result,'$.not_before'),'')<=? AND (
                     kind!='backfill' OR (
-                        coalesce(json_extract(result,'$.not_before'),'')<=?
-                        AND coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='archive_next_request'),'')<=?
+                        coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='archive_next_request'),'')<=?
                         AND EXISTS(SELECT 1 FROM feeds f WHERE f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0)
                     )
                 ) ORDER BY CASE kind WHEN 'extract' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1 ELSE 0 END,
@@ -1491,10 +1496,23 @@ class Core:
                     (now(), json.dumps(result), job["id"]),
                 )
         except Exception as error:
+            # A publisher rate-limiting a burst of extractions (twenty new posts
+            # from one host after an import) gets a later retry, not a lost article.
+            code = getattr(getattr(error, "response", None), "status_code", None)
+            attempts = (job["result"] or {}).get("attempts", 0) + 1
+            retry = job["kind"] == "extract" and code in (429, 503) and attempts < 4
             with self.db:
                 self.db.execute(
-                    "UPDATE jobs SET status='failed',updated=?,error=? WHERE id=?",
-                    (now(), str(error)[:1000], job["id"]),
+                    "UPDATE jobs SET status=?,updated=?,error=?,result=? WHERE id=?",
+                    (
+                        "queued" if retry else "failed",
+                        now(),
+                        str(error)[:1000],
+                        json.dumps(dict(attempts=attempts, not_before=retry_at(error, attempts).isoformat()))
+                        if retry
+                        else None,
+                        job["id"],
+                    ),
                 )
         return True
 

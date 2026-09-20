@@ -677,6 +677,9 @@ function App() {
         history: "Recently read",
       }[view];
   const count = articles.data?.total || 0;
+  const archive =
+    activeFeed &&
+    (data.backfills || []).find((j) => j.payload.feed_id === activeFeed.id);
   const sidebarSize = Math.max(
     180,
     Math.min(
@@ -949,6 +952,39 @@ function App() {
               onClick={markAll}
             />
           </div>
+          {archive && !searchOpen && (
+            <button
+              className="archive-progress"
+              aria-label="Archive progress"
+              onClick={() => {
+                setManageFeed(activeFeed.id);
+                setModal("feeds");
+              }}
+            >
+              {archive.status === "running" && (
+                <Loader2 size={13} className="spin" />
+              )}
+              Archive{" "}
+              {
+                {
+                  queued: "in progress",
+                  running: "in progress",
+                  paused: "paused",
+                  failed: "failed",
+                  done: "complete",
+                }[archive.status]
+              }{" "}
+              · {archive.result?.pages || 0} pages ·{" "}
+              {archive.result?.articles || 0} older articles
+              {archive.status === "queued" && archive.result?.not_before && (
+                <>
+                  {" "}
+                  · next page after{" "}
+                  {new Date(archive.result.not_before).toLocaleTimeString()}
+                </>
+              )}
+            </button>
+          )}
           {searchOpen && (
             <div className="search-filters">
               <button

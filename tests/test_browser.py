@@ -95,6 +95,10 @@ def test_desktop_reading_workflow(core, site, web_server):
         expect(page.locator(".reading-content h1")).to_have_count(0)
         assert page.url.startswith(web_server)
         page.locator(".feed-line", has_text="The Sunday Journal").click()
+        core.enqueue("backfill", {"feed_id": feed})
+        expect(page.get_by_role("button", name="Archive progress")).to_contain_text(
+            "Archive in progress · 0 pages · 0 older articles", timeout=15000
+        )  # The overview polls every ten seconds.
         page.get_by_role("button", name="Manage feed: The Sunday Journal").click()
         expect(page.get_by_role("heading", name="Manage library")).to_be_visible()
         expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()

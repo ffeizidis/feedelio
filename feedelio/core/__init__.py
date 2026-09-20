@@ -1301,7 +1301,7 @@ class Core:
             self.db.execute("UPDATE jobs SET status='removed' WHERE id=?", (id,))
         return {"ok": True}
 
-    def _archive_fetch(self, url, options):
+    def _archive_fetch(self, url, options, json=None, headers=None):
         """Use reader's HTTP stack, with the same bounds and credential policy."""
         with requests.Session() as session:
             session.trust_env = False
@@ -1313,7 +1313,10 @@ class Core:
                 session.headers["Cookie"] = options["cookie"]
             if options.get("proxy"):
                 session.proxies = dict(http=options["proxy"], https=options["proxy"])
-            with session.get(url, stream=True, timeout=(5, 30)) as response:
+            method = "GET" if json is None else "POST"
+            with session.request(
+                method, url, json=json, headers=headers, stream=True, timeout=(5, 30)
+            ) as response:
                 response.raise_for_status()
                 data = bytearray()
                 for chunk in response.iter_content(65536):
@@ -1344,6 +1347,31 @@ class Core:
             ):
                 break
             state["pending"].pop(0)
+        if state["pending"] and state["mode"] == "youtube":
+            # The watch page is the source: the listing only knows an id and a title.
+            post = state["pending"][0]
+            video = probe_video(post["url"], options)
+            id = self.ingest(
+                feed_id,
+                post["guid"],
+                video["title"] or post["title"],
+                video["url"],
+                text_html(video["description"]),
+                video["author"],
+                video["published"],
+                tags=["short"] if video["short"] else [],
+                read=read,
+            )
+            if id:
+                with self.db:
+                    self.db.execute(
+                        "UPDATE articles SET extracted=1,duration=? WHERE id=?", (video["duration"], id)
+                    )
+                state["articles"] += 1
+            state["pending"].pop(0)
+            if not state["pending"] and not state["next_url"]:
+                state["message"] = "All exposed archive pages processed."
+            return state
         if state["pending"]:
             post = state["pending"][0]
             preview = False
@@ -1388,17 +1416,27 @@ class Core:
         url = state["next_url"]
         if not url:
             return state
-        if url in state["visited"]:
+        # A YouTube continuation is a token posted to one endpoint, so the token is the page.
+        page = state.get("continuation") or url
+        if page in state["visited"]:
             raise ValueError("Archive pagination repeats a page; stopped to avoid a request loop.")
         try:
-            data, final, headers = self._archive_fetch(url, options)
+            data, final, headers = self._archive_fetch(
+                url,
+                options,
+                archives.youtube_request(state.get("continuation")),
+                {"Cookie": "SOCS=CAI"} if state["mode"] == "youtube" else None,
+            )
         except requests.HTTPError as exc:
             if state["pages"] == 0 or exc.response.status_code not in (404, 410):
                 raise
             # Synthesised (WordPress ?paged=) and stale next links end with a 404.
             state.update(next_url=None, message="All exposed archive pages processed.")
             return state
-        if state["mode"] == "substack":
+        if state["mode"] == "youtube":
+            state["pending"], state["continuation"] = archives.youtube_listing(data)
+            next_url = archives.YOUTUBE_BROWSE if state["continuation"] else None
+        elif state["mode"] == "substack":
             pending, next_url = archives.substack_page(data, final, state["offset"])
             if pending and all(p["guid"] in state.get("seen_posts", []) for p in pending):
                 raise ValueError("Archive repeats the same posts; pagination may not be supported.")
@@ -1431,13 +1469,13 @@ class Core:
                 state["articles"] += (
                     self.one("SELECT count(*) n FROM articles WHERE feed_id=?", (feed_id,))["n"] - before
                 )
-        state["visited"] = [*state["visited"], url]
+        state["visited"] = [*state["visited"], page]
         state["pages"] += 1
         state["next_url"] = next_url
         if not next_url and not state["pending"]:
             state["message"] = (
                 "All exposed archive pages processed."
-                if state["pages"] > 1
+                if state["pages"] > 1 or state["mode"] == "youtube"
                 else "This feed exposes no older-page link. Set an archive feed URL if the publisher provides one."
             )
         return state

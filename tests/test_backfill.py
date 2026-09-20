@@ -345,3 +345,72 @@ def test_new_feed_read_setting_off_keeps_first_refresh_unread(core, site):
     assert core.articles()["unread"] == 1
     with pytest.raises(ValueError, match="boolean"):
         core.save_settings({"new_feed_read": "yes"})
+
+
+def test_youtube_channel_archive_lists_the_video_grid_and_reads_watch_pages(core, site, monkeypatch):
+    from feedelio import core as module
+    from feedelio.core import backfill as archives
+
+    feed, job = prepare(core, site)
+    with core.db:  # The live feed is YouTube's, which stops at the newest 15 videos.
+        core.db.execute(
+            "UPDATE feeds SET url='https://www.youtube.com/feeds/videos.xml?channel_id=UCtest' WHERE id=?", (feed,)
+        )
+    core.ingest(feed, "yt:video:known000000", "Already here", "https://www.youtube.com/watch?v=known000000")
+
+    def grid(id, title):
+        return {"richItemRenderer": {"content": {"lockupViewModel": {
+            "contentId": id, "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+            "metadata": {"lockupMetadataViewModel": {"title": {"content": title}}},
+        }}}}
+
+    def continuation(token):
+        return {"continuationItemRenderer": {"continuationEndpoint": {"continuationCommand": {"token": token}}}}
+
+    page = {"contents": {"tabs": [{"richGridRenderer": {"contents": [
+        grid("known000000", "Already here"), grid("newer000000", "The newer one"), continuation("tok1"),
+    ]}}]}}
+    more = {"onResponseReceivedActions": [{"appendContinuationItemsAction": {"continuationItems": [
+        {"richItemRenderer": {"content": {"videoRenderer": {"videoId": "older000000", "title": {"runs": [{"text": "The older one"}]}}}}},
+    ]}}]}
+    requests = []
+
+    def fetch(self, url, options, json=None, headers=None):
+        requests.append((url, json))
+        if json is None:
+            assert url == "https://www.youtube.com/channel/UCtest/videos" and headers == {"Cookie": "SOCS=CAI"}
+            return b"<html><script>var ytInitialData = " + module.json.dumps(page).encode() + b";</script></html>", url, {}
+        assert url == archives.YOUTUBE_BROWSE and json["continuation"] == "tok1"
+        return module.json.dumps(more).encode(), url, {}
+
+    def probe(url, options=None):
+        id = url.rsplit("=", 1)[1]
+        return dict(
+            short=id == "older000000",
+            url=f"https://www.youtube.com/shorts/{id}" if id == "older000000" else url,
+            duration=90,
+            title=f"Title of {id}",
+            description="Line one https://example.test/\n\nLine two",
+            author="Channel",
+            published="2021-03-04T05:06:07-07:00",
+        )
+
+    monkeypatch.setattr(Core, "_archive_fetch", fetch)
+    monkeypatch.setattr(module, "probe_video", probe)
+    states = []
+    for _ in range(5):
+        due(core, job)
+        states.append(run(core, job))
+        if states[-1]["status"] == "done":
+            break
+    assert [s["status"] for s in states] == ["queued", "queued", "queued", "done"]
+    assert [r[1] is None for r in requests] == [True, False]  # One listing page, one continuation.
+    titles = {a["title"]: a for a in core.articles()["items"]}
+    assert set(titles) == {"Already here", "Title of newer000000", "Title of older000000"}
+    older = core.article(titles["Title of older000000"]["id"])
+    assert older["url"] == "https://www.youtube.com/shorts/older000000" and older["tags"] == ["short"]
+    assert older["published"].startswith("2021-03-04") and older["duration"] == 90 and older["author"] == "Channel"
+    assert '<a href="https://example.test/"' in older["body"] and "<p>Line two</p>" in older["body"]
+    assert states[-1]["result"]["articles"] == 2
+    assert states[-1]["result"]["message"] == "All exposed archive pages processed."
+    assert not core.rows("SELECT 1 FROM jobs WHERE kind='extract' AND status='queued'")

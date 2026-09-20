@@ -1042,8 +1042,8 @@ dialog::backdrop {
   padding: 24px 19px 18px 18px;
 }
 .brand {
-  height: 40px;
-  padding-left: 10px;
+  height: 50px;
+  padding-left: 18px;
   flex-shrink: 0;
 }
 .brand a {
@@ -1051,14 +1051,14 @@ dialog::backdrop {
   display: inline-flex;
   align-items: baseline;
   font:
-    600 23px/1 system-ui,
+    600 29px/1 system-ui,
     sans-serif;
   letter-spacing: -0.025em;
   text-decoration: none;
 }
 .script-f {
   font:
-    400 62px/0.62 Italianno,
+    400 78px/0.62 Italianno,
     cursive;
   color: var(--accent);
 }
@@ -1764,11 +1764,12 @@ mark {
   justify-content: flex-start;
   padding: 7px 0;
   color: var(--accent);
-  font-size: 14px;
+  font-size: 18px;
   margin-bottom: 30px;
 }
 .settings-sidebar .section-label {
   margin-bottom: 13px;
+  font-size: 15px;
 }
 .dialog-tabs {
   display: flex;
@@ -1780,9 +1781,9 @@ mark {
 }
 .dialog-tabs button {
   justify-content: flex-start;
-  padding: 7px 10px 7px 19px;
+  padding: 8px 10px 8px 19px;
   font:
-    400 15px/1.15 system-ui,
+    400 19px/1.15 system-ui,
     sans-serif;
   border: 0;
   color: var(--muted);
@@ -1793,9 +1794,6 @@ mark {
   box-shadow: inset 3px 0 0 var(--accent);
   border: 0;
   font-weight: 600;
-}
-.dialog-tabs button:nth-child(6) {
-  margin-top: 24px;
 }
 .manager-body {
   padding: 24px 40px 60px;

@@ -83,8 +83,23 @@ try {
 }
 // The address names the page, so a reload or a shared link lands on the same
 // stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /history, /a/<article>.
+const LIBRARY_TABS = [
+  "feeds",
+  "folders",
+  "appearance",
+  "keyboard",
+  "data",
+  "rules",
+  "downloads",
+  "statistics",
+];
 function readLocation() {
-  const [, kind, id] = location.pathname.split("/");
+  const [, kind, id, feed] = location.pathname.split("/");
+  if (kind === "library")
+    return {
+      modal: LIBRARY_TABS.includes(id) ? id : "feeds",
+      manageFeed: id === "feeds" && feed ? feed : null,
+    };
   if (kind === "a" && id) return { selected: id };
   if (kind === "f" && id) return { view: "all", scope: { feed_id: id } };
   if (kind === "d" && id) return { view: "all", scope: { folder_id: id } };
@@ -394,9 +409,9 @@ function App() {
     [modal, setModal] = useState(
       new URLSearchParams(location.search).has("subscribe")
         ? "subscribe"
-        : null,
+        : start.modal || null,
     );
-  const [manageFeed, setManageFeed] = useState(null);
+  const [manageFeed, setManageFeed] = useState(start.manageFeed || null);
   const [toast, setToast] = useState(null),
     [busy, setBusy] = useState(0),
     [loadImages, setLoadImages] = useState(false),
@@ -433,13 +448,15 @@ function App() {
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, []);
-  // After the layer above has pushed its entry, name it.
+  // After the layer above has pushed its entry, name it. The library names
+  // its own sections while it is open.
   useEffect(() => {
+    if (LIBRARY_TABS.includes(modal)) return;
     const url = pageUrl(selected, view, scope) + location.search;
     layers.current.url = url;
     if (location.pathname + location.search !== url)
       history.replaceState(history.state, "", url);
-  }, [selected, view, scope]);
+  }, [selected, view, scope, modal]);
   const searchRef = useRef(null),
     readingRef = useRef(null),
     navigation = useRef({ key: null, items: [], index: -1 });
@@ -1669,15 +1686,7 @@ function App() {
           </form>
         </Modal>
       )}
-      {[
-        "feeds",
-        "appearance",
-        "folders",
-        "rules",
-        "data",
-        "statistics",
-        "downloads",
-      ].includes(modal) && (
+      {LIBRARY_TABS.includes(modal) && (
         <Library
           initial={modal}
           initialFeed={manageFeed}
@@ -1985,6 +1994,13 @@ function Library({
   useEffect(() => {
     libraryRef.current.showModal();
   }, []);
+  // The library's address names its section, and the feed being edited.
+  useEffect(() => {
+    const url =
+      "/library/" + tab + (tab === "feeds" && edit ? "/" + edit.id : "");
+    layers.current.url = url;
+    if (location.pathname !== url) history.replaceState(history.state, "", url);
+  }, [tab, edit]);
   const [settingsWidth, setSettingsWidth] = useState(
     data.settings.sidebar_width,
   );

@@ -89,6 +89,7 @@ DEFAULTS = dict(
     open_titles_in="reader",
     new_feed_read=True,
     extract_articles=True,
+    collapsed_folders=[],
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 

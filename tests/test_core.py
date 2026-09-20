@@ -99,6 +99,19 @@ def test_folder_tree_move_counts_and_cycle(core, site):
         core.edit_feed(id, folder_id="missing")
     core.delete_folder(child)
     assert core.feeds()[0]["folder_id"] == "inbox"
+    # Folder names are unique across the tree, case-insensitively; renaming in place is fine.
+    with pytest.raises(ValueError, match="already exists"):
+        core.save_folder("technology")
+    with pytest.raises(ValueError, match="already exists"):
+        core.save_folder("Unfiled", parent)
+    core.save_folder("Technology", None, parent)
+    core.save_folder("Reading", parent)
+    imported = core.import_opml(
+        f'<opml><body><outline text="reading"><outline text="Twin" xmlUrl="{site[0]}/json"/></outline></body></opml>'
+    )
+    assert imported["imported"] == 1
+    assert [f["name"] for f in core.folders() if f["name"].lower() == "reading"] == ["Reading"]
+    assert core.feeds()[1]["folder_id"] == next(f["id"] for f in core.folders() if f["name"] == "Reading")
 
 
 def test_state_undo_history_and_deleted_feeds(core, site):

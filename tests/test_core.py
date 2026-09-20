@@ -368,3 +368,17 @@ def test_core_opens_without_schema_writes_and_caches_frame_sources(core):
             assert again.frame_sources() == "https:"
     core.save_settings({"invidious": "http://127.0.0.1:3000"})
     assert Core(core.root).frame_sources() == "https: http://127.0.0.1:3000"
+
+
+def test_feeds_extract_full_articles_by_default(core, site):
+    base, _, _ = site
+    jobs = "SELECT count(*) n FROM jobs WHERE kind='extract'"
+    id = core.subscribe(base + "/rss")["id"]
+    core.refresh(id)
+    assert core.one(jobs)["n"] == 1
+    core.save_settings({"extract_articles": False})
+    id = core.subscribe(base + "/json")["id"]
+    core.refresh(id)
+    assert core.one(jobs)["n"] == 1
+    core.refresh(core.subscribe(base + "/atom", options={"extract": True})["id"])
+    assert core.one(jobs)["n"] == 2

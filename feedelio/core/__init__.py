@@ -81,6 +81,7 @@ DEFAULTS = dict(
     reduce_motion=False,
     open_titles_in="reader",
     new_feed_read=True,
+    extract_articles=True,
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 
@@ -229,7 +230,7 @@ class Core:
         }.items():
             if merged[key] not in choices:
                 raise ValueError(f"Invalid {key}.")
-        for key in ("feed_colours", "reduce_motion", "new_feed_read"):
+        for key in ("feed_colours", "reduce_motion", "new_feed_read", "extract_articles"):
             if not isinstance(merged[key], bool):
                 raise ValueError(f"{key} must be a boolean.")
         if merged["invidious"]:
@@ -932,10 +933,11 @@ class Core:
         read = self.settings()["new_feed_read"] and not self.rows(
             "SELECT 1 FROM articles WHERE feed_id=? LIMIT 1", (feed_id,)
         )
+        extract = self.extracts(f["options"])
         try:
             options = request_options(f)
             if options.get("scrape_selector"):
-                new = self.scrape(f, read)
+                new = self.scrape(f, read, extract)
             else:
                 moved = []
                 with self.reader(options, moved) as reader:
@@ -998,7 +1000,7 @@ class Core:
                         )
                         if self.db.total_changes > before:
                             new += 1
-                            if options.get("extract") and id:
+                            if extract and id:
                                 self.enqueue("extract", {"article_id": id})
                     with self.db:
                         self.db.execute(
@@ -1051,7 +1053,12 @@ class Core:
                 )
             raise
 
-    def scrape(self, feed, read=False):
+    def extracts(self, options):
+        """Per-feed extract option, or the global default when the feed has none."""
+        value = options.get("extract")
+        return self.settings()["extract_articles"] if value is None else bool(value)
+
+    def scrape(self, feed, read=False, extract=False):
         data, url, _ = fetch(feed["url"], request_options(feed))
         soup = BeautifulSoup(data, "html.parser")
         items = soup.select(feed["options"]["scrape_selector"])
@@ -1070,7 +1077,7 @@ class Core:
                 )
                 if self.db.total_changes > before:
                     count += 1
-                    if feed["options"].get("extract"):
+                    if extract:
                         self.enqueue("extract", {"article_id": id})
         return count
 

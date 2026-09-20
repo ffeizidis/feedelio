@@ -2423,7 +2423,7 @@ function FeedEditor({ feed: f, data, act, onBack }) {
         <input
           type="checkbox"
           name="extract"
-          defaultChecked={f.options.extract}
+          defaultChecked={f.options.extract ?? data.settings.extract_articles}
         />
         <span>Automatically fetch full articles</span>
       </label>
@@ -2627,6 +2627,7 @@ function DataSettings({ data, act, submit }) {
                   rsshub: p.rsshub,
                   invidious: p.invidious,
                   new_feed_read: p.new_feed_read === "on",
+                  extract_articles: p.extract_articles === "on",
                 },
               },
               "Library settings saved",
@@ -2655,6 +2656,17 @@ function DataSettings({ data, act, submit }) {
           <span>
             Start new subscriptions read. Existing posts and backfilled history
             are marked read; only posts published later count as unread.
+          </span>
+        </label>
+        <label className="check-field">
+          <input
+            type="checkbox"
+            name="extract_articles"
+            defaultChecked={data.settings.extract_articles}
+          />
+          <span>
+            Automatically fetch full articles for feeds that do not set their
+            own preference.
           </span>
         </label>
         <Field label="RSSHub instance">

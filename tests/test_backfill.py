@@ -21,7 +21,7 @@ def prepare(core, site, path="/rss"):
 def due(core, job):
     # Advance persisted deadlines, not the real clock or the production delay.
     with core.db:
-        core.db.execute("DELETE FROM settings WHERE key='archive_next_request'")
+        core.db.execute("DELETE FROM settings WHERE key='archive_hosts'")
         core.db.execute("UPDATE jobs SET result=json_remove(result,'$.not_before') WHERE id=?", (job,))
 
 
@@ -256,7 +256,7 @@ def test_retry_budget_resume_and_backfill_backup(core, site, tmp_path):
     with Core(tmp_path / "restored") as restored:
         restored.restore(core.backup())
         assert restored.one("SELECT * FROM jobs WHERE id=?", (job,))["result"] == result["result"]
-        assert restored.rows("SELECT value FROM settings WHERE key='archive_next_request'")
+        assert restored.rows("SELECT value FROM settings WHERE key='archive_hosts'")
         due(restored, job)
         assert run(restored, job)["status"] == "done"
         assert restored.articles()["total"] == 2
@@ -418,3 +418,18 @@ def test_youtube_channel_archive_lists_the_video_grid_and_reads_watch_pages(core
     queue = core.overview()["queue"]
     assert queue["backfill"]["waiting"] == 0 and queue["backfill"]["done"] == 1
     assert queue["backfill"]["articles"] == 2 and "refresh" in queue
+
+
+def test_archive_pacing_is_per_site_so_different_sites_advance_together(core, site):
+    base, _, _ = site
+    first, job_a = prepare(core, site)
+    second = core.subscribe(base.replace("127.0.0.1", "localhost") + "/rss")["id"]
+    with core.db:
+        core.db.execute("UPDATE jobs SET status='done' WHERE kind='refresh'")
+    job_b = core.enqueue("backfill", {"feed_id": second})["id"]
+    while core.tick():
+        pass
+    steps = {id: core.one("SELECT * FROM jobs WHERE id=?", (id,))["result"]["pages"] for id in (job_a, job_b)}
+    assert steps == {job_a: 1, job_b: 1}  # Neither site waited for the other's minute.
+    assert set(core._archive_hosts()) == {"127.0.0.1", "localhost"}
+    assert not core.tick()  # Both sites are inside their minute; the worker idles.

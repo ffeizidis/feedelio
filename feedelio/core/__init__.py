@@ -999,6 +999,22 @@ class Core:
                     (pending[0]["id"],),
                 )
                 return pending[0]
+        if kind == "refresh":
+            if set(payload) - {"feed_id", "manual"}:
+                raise ValueError("Unknown refresh option.")
+            # A feed the user asks for now jumps ahead of a queued library-wide
+            # refresh: promote its pending job rather than adding a second one.
+            if payload.get("manual") and payload.get("feed_id"):
+                pending = self.rows(
+                    "SELECT id FROM jobs WHERE kind='refresh' AND json_extract(payload,'$.feed_id')=? AND status='queued'",
+                    (payload["feed_id"],),
+                )
+                if pending:
+                    self.db.execute(
+                        "UPDATE jobs SET payload=? WHERE id=?",
+                        (json.dumps(payload, sort_keys=True), pending[0]["id"]),
+                    )
+                    return pending[0]
         encoded = json.dumps(payload, sort_keys=True)
         pending = self.rows(
             "SELECT id FROM jobs WHERE kind=? AND payload=? AND status IN ('queued','running')",
@@ -1557,7 +1573,8 @@ class Core:
                         coalesce((SELECT json_extract(value,'$') FROM settings WHERE key='archive_next_request'),'')<=?
                         AND EXISTS(SELECT 1 FROM feeds f WHERE f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0)
                     )
-                ) ORDER BY CASE kind WHEN 'extract' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1 ELSE 0 END,
+                ) ORDER BY CASE kind WHEN 'extract' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
+                  WHEN 'refresh' THEN -coalesce(json_extract(payload,'$.manual'),0) ELSE 0 END,
                   updated,created LIMIT 1
             """,
                 (now(), now()),
@@ -1574,7 +1591,7 @@ class Core:
         try:
             p = job["payload"]
             if job["kind"] == "refresh":
-                result = self.refresh(**p) if p.get("feed_id") else self.refresh_all()
+                result = self.refresh(p["feed_id"]) if p.get("feed_id") else self.refresh_all()
             elif job["kind"] == "extract":
                 result = self.extract_article(**p)
             elif job["kind"] == "download":

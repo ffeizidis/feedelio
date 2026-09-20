@@ -107,24 +107,41 @@ class GuardAdapter(PinnedAdapter):
 
 
 class Core:
+    # Schema and one-off migrations run once per process per data directory, so
+    # opening a Core is a plain connect and never waits on a concurrent writer.
+    initialised = set()
+    # CSP frame sources per data directory; cleared by save_settings and restore.
+    # Only the API process changes settings, so a second API process would need
+    # its own invalidation.
+    frame_cache = {}
+
+    @staticmethod
+    def data_root(data_dir=None):
+        return Path(data_dir or os.getenv("FEEDELIO_DATA", "data")).resolve()
+
     def __init__(self, data_dir=None):
-        self.root = Path(data_dir or os.getenv("FEEDELIO_DATA", "data")).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
-        (self.root / "downloads").mkdir(exist_ok=True)
-        self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
+        self.root = Core.data_root(data_dir)
+        self.db = (
+            sqlite3.connect(self.root / "app.sqlite", timeout=30) if self.root in Core.initialised else None
+        )
+        if self.db is None:
+            self.root.mkdir(parents=True, exist_ok=True)
+            (self.root / "downloads").mkdir(exist_ok=True)
+            self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
+            self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
+            # Stable subscription colours, including deleted feeds so restoring or
+            # removing subscriptions never shifts the remaining palette.
+            self.db.execute("""UPDATE feeds SET options=json_set(options,'$.hue',
+              (SELECT count(*) FROM feeds older WHERE older.created<feeds.created
+                OR (older.created=feeds.created AND older.id<feeds.id)) % 14)
+              WHERE json_extract(options,'$.hue') IS NULL""")
+            self.db.commit()
+            Core.initialised.add(self.root)
         self.db.row_factory = sqlite3.Row
         self.db.create_function(
             "title_similarity", 2, lambda a, b: ratio(a.casefold(), b.casefold()), deterministic=True
         )
         self.db.execute("PRAGMA foreign_keys=ON")
-        self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
-        # Stable subscription colours, including deleted feeds so restoring or
-        # removing subscriptions never shifts the remaining palette.
-        self.db.execute("""UPDATE feeds SET options=json_set(options,'$.hue',
-          (SELECT count(*) FROM feeds older WHERE older.created<feeds.created
-            OR (older.created=feeds.created AND older.id<feeds.id)) % 14)
-          WHERE json_extract(options,'$.hue') IS NULL""")
-        self.db.commit()
 
     def __enter__(self):
         return self
@@ -222,14 +239,17 @@ class Core:
                 "INSERT OR REPLACE INTO settings VALUES (?,?)",
                 [(k, json.dumps(v)) for k, v in values.items()],
             )
+        Core.frame_cache.pop(self.root, None)
         return self.settings()
 
     def frame_sources(self):
-        try:
-            origin = local_frame_origin(self.settings()["invidious"])
-        except ValueError:
-            origin = ""
-        return "https:" + (" " + origin if origin else "")
+        if self.root not in Core.frame_cache:
+            try:
+                origin = local_frame_origin(self.settings()["invidious"])
+            except ValueError:
+                origin = ""
+            Core.frame_cache[self.root] = "https:" + (" " + origin if origin else "")
+        return Core.frame_cache[self.root]
 
     def folders(self):
         return self.rows("SELECT * FROM folders ORDER BY name COLLATE NOCASE")
@@ -407,6 +427,14 @@ class Core:
             raise ValueError("Invalid feed hue.")
         if options.get("interval") is not None and not 5 <= int(options["interval"]) <= 10080:
             raise ValueError("Refresh interval must be 5–10080 minutes, or null for automatic.")
+        days = options.get("retention_days")
+        if days is not None and (
+            isinstance(days, bool) or not isinstance(days, (int, float)) or not 0 <= days <= 36500
+        ):
+            raise ValueError("Feed retention must be 0–36500 days, or null for the global setting.")
+        for key in ("archive", "extract"):
+            if key in options and not isinstance(options[key], bool):
+                raise ValueError(f"{key} must be a boolean.")
         for key in ("selector", "scrape_selector", "scrape_link", "transcript_selector"):
             if options.get(key):
                 BeautifulSoup("", "html.parser").select(options[key])
@@ -742,7 +770,10 @@ class Core:
         transcript="",
         tags=None,
     ):
-        url = clean_url(url)
+        # Publisher links reach window.open and <a href>; keep only web URLs.
+        url = clean_url(url) if urlsplit(url).scheme in ("http", "https") else ""
+        if enclosures is not None:
+            enclosures = [e for e in enclosures if urlsplit(e.get("href") or "").scheme in ("http", "https")]
         body = sanitize(body, url)
         digest = fingerprint(title, plain(body))
         guid = guid or url or digest
@@ -819,11 +850,11 @@ class Core:
             extracted=0,
             state_changed=None,
         )
-        recent = self.rows(
-            "SELECT title,feed_id FROM articles WHERE published>? AND deleted=0 ORDER BY published DESC LIMIT 1000",
-            ((datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),),
-        )
         if len(title) >= 20:
+            recent = self.rows(
+                "SELECT title,feed_id FROM articles WHERE published>? AND deleted=0 ORDER BY published DESC LIMIT 1000",
+                ((datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),),
+            )
             a["duplicate"] = int(
                 any(
                     x["feed_id"] != feed_id and ratio(title.casefold(), x["title"].casefold()) >= 94
@@ -876,13 +907,16 @@ class Core:
         )
         return {"id": id}
 
-    def refresh_interval(self, feed_id, options):
-        dates = [
+    def recent_dates(self, feed_id):
+        return [
             datetime.fromisoformat(a["published"])
             for a in self.rows(
                 "SELECT published FROM articles WHERE feed_id=? ORDER BY published DESC LIMIT 25", (feed_id,)
             )
         ]
+
+    def refresh_interval(self, feed_id, options, dates=None):
+        dates = self.recent_dates(feed_id) if dates is None else dates
         gaps = [(a - b).total_seconds() / 60 for a, b in zip(dates, dates[1:]) if a > b]
         return int(
             options.get("interval") or (max(15, min(1440, statistics.median(gaps) / 2)) if gaps else 60)
@@ -978,17 +1012,11 @@ class Core:
                                     (feed_id,),
                                 )
                             self.db.execute("UPDATE feeds SET url=? WHERE id=?", (moved[-1], feed_id))
-            dates = [
-                datetime.fromisoformat(a["published"])
-                for a in self.rows(
-                    "SELECT published FROM articles WHERE feed_id=? ORDER BY published DESC LIMIT 25",
-                    (feed_id,),
-                )
-            ]
+            dates = self.recent_dates(feed_id)
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
                 current = self.one("SELECT options FROM feeds WHERE id=?", (feed_id,))
-                interval = self.refresh_interval(feed_id, current["options"])
+                interval = self.refresh_interval(feed_id, current["options"], dates)
                 self.db.execute(
                     "UPDATE feeds SET checked=?,next_check=?,last_article=?,interval=?,error=NULL,failures=0 WHERE id=?",
                     (
@@ -1316,42 +1344,46 @@ class Core:
 
     def purge(self):
         count = 0
-        for row in self.rows("SELECT id FROM feeds WHERE deleted=0"):
-            with self.db:
-                self.db.execute("BEGIN IMMEDIATE")
-                current = self.rows("SELECT * FROM feeds WHERE id=? AND deleted=0", (row["id"],))
-                if not current:
-                    continue
-                f = current[0]
-                days = f["options"].get("retention_days", self.settings()["retention_days"])
-                if f["options"].get("archive") or not days:
-                    continue
-                cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
-                doomed = self.rows(
-                    "SELECT id,guid FROM articles WHERE feed_id=? AND added<? AND starred=0 AND read=1",
-                    (f["id"], cutoff),
-                )
-                self.db.executemany(
-                    "INSERT OR IGNORE INTO tombstones VALUES (?,?)", [(f["id"], a["guid"]) for a in doomed]
-                )
-                self.db.executemany("DELETE FROM articles WHERE id=?", [(a["id"],) for a in doomed])
-            with self.reader() as reader:
-                # Public delete_entry only accepts manually added entries. This is
-                # the same pinned internal primitive reader's retention plugins use.
-                reader._storage.delete_entries(
-                    [
-                        (f["url"], a["guid"])
-                        for a in doomed
-                        if reader.get_entry((f["url"], a["guid"]), None) is not None
-                    ]
-                )
-            count += len(doomed)
+        with self.reader() as reader:
+            for row in self.rows("SELECT id FROM feeds WHERE deleted=0"):
+                count += self._purge_feed(reader, row["id"])
         with self.db:
             self.db.execute(
                 "DELETE FROM undo WHERE created<?",
                 ((datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),),
             )
         return {"purged": count}
+
+    def _purge_feed(self, reader, feed_id):
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            current = self.rows("SELECT * FROM feeds WHERE id=? AND deleted=0", (feed_id,))
+            if not current:
+                return 0
+            f = current[0]
+            days = f["options"].get("retention_days")
+            days = self.settings()["retention_days"] if days is None else days
+            if f["options"].get("archive") or not days:
+                return 0
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+            doomed = self.rows(
+                "SELECT id,guid FROM articles WHERE feed_id=? AND added<? AND starred=0 AND read=1",
+                (f["id"], cutoff),
+            )
+            self.db.executemany(
+                "INSERT OR IGNORE INTO tombstones VALUES (?,?)", [(f["id"], a["guid"]) for a in doomed]
+            )
+            self.db.executemany("DELETE FROM articles WHERE id=?", [(a["id"],) for a in doomed])
+        # Public delete_entry only accepts manually added entries. This is
+        # the same pinned internal primitive reader's retention plugins use.
+        reader._storage.delete_entries(
+            [
+                (f["url"], a["guid"])
+                for a in doomed
+                if reader.get_entry((f["url"], a["guid"]), None) is not None
+            ]
+        )
+        return len(doomed)
 
     def tick(self):
         with self.db:
@@ -1554,11 +1586,15 @@ class Core:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             data = {t: [dict(r) for r in self.db.execute(f"SELECT * FROM {t}")] for t in tables}
-            media = {
-                j["id"]: base64.b64encode(self.download_path(j["id"]).read_bytes()).decode("ascii")
-                for j in data["jobs"]
-                if j["kind"] == "download" and j["status"] == "done"
-            }
+            media = {}
+            for j in data["jobs"]:
+                if j["kind"] == "download" and j["status"] == "done":
+                    path = self.download_path(j["id"])
+                    if not path.is_file():
+                        raise ValueError(
+                            f"Downloaded episode {j['id']} is missing; remove it before backing up."
+                        )
+                    media[j["id"]] = base64.b64encode(path.read_bytes()).decode("ascii")
         return {"format": "feedelio", "version": 1, "created": now(), "tables": data, "media": media}
 
     def restore(self, backup):
@@ -1627,6 +1663,7 @@ class Core:
             for path in written:
                 path.unlink(missing_ok=True)
             raise
+        Core.frame_cache.pop(self.root, None)
         return {"restored": len(data["articles"])}
 
     def obsidian(self, id):
@@ -1672,28 +1709,33 @@ class Core:
             id = self.ingest(feed_id, url, e.get("title") or url, url)
             if not id:
                 continue
-            a = self.article(id)
-            previous = self.rows("SELECT chrome_updated FROM chrome_state WHERE url=?", (url,))
-            changed = not previous or e["lastUpdateTime"] > previous[0]["chrome_updated"]
-            local_time = (
-                datetime.fromisoformat(a["state_changed"]).timestamp() * 1000 if a["state_changed"] else 0
-            )
-            if changed and e["lastUpdateTime"] > local_time:
-                with self.db:
+            # State sync needs a few columns, not the rendered article; the list
+            # is resent every minute.
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                a = self.one(
+                    "SELECT read,read_at,state_changed,body='' empty FROM articles WHERE id=?", (id,)
+                )
+                previous = self.rows("SELECT chrome_updated FROM chrome_state WHERE url=?", (url,))
+                changed = not previous or e["lastUpdateTime"] > previous[0]["chrome_updated"]
+                local_time = (
+                    datetime.fromisoformat(a["state_changed"]).timestamp() * 1000 if a["state_changed"] else 0
+                )
+                if changed and e["lastUpdateTime"] > local_time:
                     stamp = datetime.fromtimestamp(e["lastUpdateTime"] / 1000, timezone.utc).isoformat()
                     self.db.execute(
                         "UPDATE articles SET read=?,read_at=?,state_changed=? WHERE id=?",
                         (int(e["hasBeenRead"]), stamp if e["hasBeenRead"] else a["read_at"], stamp, id),
                     )
-                a["read"] = e["hasBeenRead"]
-            with self.db:
+                    a["read"] = e["hasBeenRead"]
                 self.db.execute(
                     "INSERT OR REPLACE INTO chrome_state VALUES (?,?)", (url, e["lastUpdateTime"])
                 )
-            if not a["body"] and not self.rows(
-                "SELECT id FROM jobs WHERE kind='extract' AND json_extract(payload,'$.article_id')=?", (id,)
-            ):
-                self.enqueue("extract", {"article_id": id})
+                if a["empty"] and not self.rows(
+                    "SELECT id FROM jobs WHERE kind='extract' AND json_extract(payload,'$.article_id')=?",
+                    (id,),
+                ):
+                    self._enqueue("extract", {"article_id": id})
             result.append({"url": url, "hasBeenRead": bool(a["read"])})
         return {"entries": result}
 

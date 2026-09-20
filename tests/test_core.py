@@ -298,3 +298,71 @@ def test_architecture_reader_imports_only_in_core():
                 assert all(not x.name.startswith("reader") for x in node.names), path
             elif isinstance(node, ast.ImportFrom):
                 assert not (node.module or "").startswith("reader"), path
+
+
+def test_ingest_keeps_only_web_urls(core, site):
+    base, routes, _ = site
+    routes["/scrape-bad"] = (
+        200,
+        {"Content-Type": "text/html"},
+        '<html><article class="story"><a href="javascript:alert(1)">Scripted link</a></article>'
+        '<article class="story"><a href="/fine">Fine link</a></article></html>',
+    )
+    routes["/json-bad"] = (
+        200,
+        {"Content-Type": "application/feed+json"},
+        json.dumps(
+            {
+                "version": "https://jsonfeed.org/version/1.1",
+                "title": "Bad JSON",
+                "items": [
+                    {
+                        "id": "js",
+                        "title": "Scripted JSON story",
+                        "url": "javascript:alert(2)",
+                        "content_text": "text",
+                        "attachments": [
+                            {"url": "javascript:alert(3)", "mime_type": "audio/mpeg"},
+                            {"url": base + "/episode.mp3", "mime_type": "audio/mpeg"},
+                        ],
+                    }
+                ],
+            }
+        ),
+    )
+    scraped = core.subscribe(base + "/scrape-bad", options={"scrape_selector": "article.story"})["id"]
+    core.refresh(scraped)
+    parsed = core.subscribe(base + "/json-bad")["id"]
+    core.refresh(parsed)
+    urls = {a["title"]: a["url"] for a in core.articles()["items"]}
+    assert urls["Scripted link"] == "" and urls["Fine link"] == base + "/fine"
+    assert urls["Scripted JSON story"] == ""
+    story = next(a for a in core.articles()["items"] if a["title"] == "Scripted JSON story")
+    assert [e["href"] for e in core.article(story["id"])["enclosures"]] == [base + "/episode.mp3"]
+    assert core.article(story["id"])["url"] == base + "/json-bad"
+
+
+def test_feed_option_validation(core, site):
+    id = subscription(core, site)
+    for bad in (
+        {"retention_days": "abc"},
+        {"retention_days": -1},
+        {"retention_days": True},
+        {"archive": "on"},
+    ):
+        with pytest.raises(ValueError):
+            core.edit_feed(id, options=bad)
+    core.edit_feed(id, options={"retention_days": 0, "archive": True, "extract": False})
+    core.edit_feed(id, options={"retention_days": None})
+    assert core.purge()["purged"] == 0
+
+
+def test_core_opens_without_schema_writes_and_caches_frame_sources(core):
+    import sqlite3
+
+    with sqlite3.connect(core.root / "app.sqlite", timeout=0) as other:
+        other.execute("BEGIN IMMEDIATE")
+        with Core(core.root) as again:  # A concurrent writer must not delay opening.
+            assert again.frame_sources() == "https:"
+    core.save_settings({"invidious": "http://127.0.0.1:3000"})
+    assert Core(core.root).frame_sources() == "https: http://127.0.0.1:3000"

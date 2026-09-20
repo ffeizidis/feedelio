@@ -69,8 +69,10 @@ async def protect(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
-    with Core() as core:
-        frames = core.frame_sources()
+    frames = Core.frame_cache.get(Core.data_root())
+    if frames is None:  # Cached per process; only settings changes recompute it.
+        with Core() as core:
+            frames = core.frame_sources()
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: http: data:; media-src 'self' https: http:; "
         f"frame-src {frames}; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"

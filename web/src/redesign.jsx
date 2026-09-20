@@ -370,8 +370,87 @@ export function AppearanceSettings({ settings: s, pref }) {
   );
 }
 
+export function FolderSelect({
+  data,
+  act,
+  name,
+  label,
+  value,
+  onChange,
+  exclude = new Set(),
+  top,
+}) {
+  const [creating, setCreating] = useState(false),
+    [draft, setDraft] = useState(""),
+    [error, setError] = useState("");
+  async function create() {
+    if (!draft.trim()) return;
+    try {
+      const created = await act(
+        "save_folder",
+        { name: draft.trim(), parent_id: null },
+        "Folder created",
+      );
+      onChange(created.id);
+      setCreating(false);
+      setDraft("");
+      setError("");
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  return (
+    <>
+      <select
+        name={name}
+        aria-label={label}
+        value={value}
+        onChange={(e) =>
+          e.target.value === "+" ? setCreating(true) : onChange(e.target.value)
+        }
+      >
+        {top && <option value="">Top level</option>}
+        {data.folders
+          .filter((f) => !exclude.has(f.id))
+          .map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.name}
+            </option>
+          ))}
+        <option value="+">+ New folder…</option>
+      </select>
+      {creating && (
+        <div className="inline-folder">
+          <input
+            autoFocus
+            aria-label="New folder name"
+            placeholder="New folder name"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                create();
+              }
+              if (e.key === "Escape") setCreating(false);
+            }}
+          />
+          <button type="button" className="primary" onClick={create}>
+            Create
+          </button>
+          <button type="button" onClick={() => setCreating(false)}>
+            Cancel
+          </button>
+          {error && <p role="alert">{error}</p>}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""),
+    [parent, setParent] = useState(folder?.parent_id || "");
   const descendants = new Set(folder ? [folder.id] : []);
   for (let i = 0; i < data.folders.length; i++)
     for (const f of data.folders)
@@ -408,16 +487,15 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
           />
         </Field>
         <Field label="Put folder under">
-          <select name="parent" defaultValue={folder?.parent_id || ""}>
-            <option value="">Top level</option>
-            {data.folders
-              .filter((f) => f.id !== "inbox" && !descendants.has(f.id))
-              .map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-          </select>
+          <FolderSelect
+            data={data}
+            act={act}
+            name="parent"
+            value={parent}
+            onChange={setParent}
+            exclude={new Set(["inbox", ...descendants])}
+            top
+          />
         </Field>
         {error && <p role="alert">{error}</p>}
         <div className="sheet-actions">
@@ -471,6 +549,27 @@ export function FolderManager({ data, act, onEdit, onNew }) {
       setError(e.message);
     }
   }
+  async function nest(id, parent) {
+    const folder = data.folders.find((f) => f.id === id);
+    if (!folder || folder.parent_id === parent) return;
+    try {
+      await act(
+        "save_folder",
+        { id, name: folder.name, parent_id: parent },
+        parent ? "Folder nested" : "Folder moved to top level",
+      );
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+  function drop(e, target) {
+    e.preventDefault();
+    e.stopPropagation();
+    const feed = e.dataTransfer.getData("text/feedelio-feed"),
+      folder = e.dataTransfer.getData("text/feedelio-folder");
+    if (data.feeds.some((x) => x.id === feed)) move(feed, target || "inbox");
+    else if (folder && folder !== target) nest(folder, target);
+  }
   const tree = (parent = null) =>
     data.folders
       .filter((f) => f.parent_id === parent)
@@ -482,14 +581,16 @@ export function FolderManager({ data, act, onEdit, onNew }) {
             className="folder-group"
             key={f.id}
             onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const id = e.dataTransfer.getData("text/feedelio-feed");
-              if (data.feeds.some((x) => x.id === id)) move(id, f.id);
-            }}
+            onDrop={(e) => drop(e, f.id)}
           >
-            <div className="folder-group-heading">
+            <div
+              className="folder-group-heading"
+              draggable={f.id !== "inbox"}
+              onDragStart={(e) => {
+                e.dataTransfer.setData("text/feedelio-folder", f.id);
+                e.stopPropagation();
+              }}
+            >
               <button
                 aria-label={`${closed[f.id] ? "Expand" : "Collapse"} ${f.name}`}
                 onClick={() => setClosed({ ...closed, [f.id]: !closed[f.id] })}
@@ -500,7 +601,7 @@ export function FolderManager({ data, act, onEdit, onNew }) {
               <small>
                 {feeds.length
                   ? `${feeds.length} feeds · ${f.unread} unread`
-                  : "empty — drag feeds here"}
+                  : "empty — drag feeds or folders here"}
               </small>
               {f.id !== "inbox" && (
                 <button
@@ -568,7 +669,16 @@ export function FolderManager({ data, act, onEdit, onNew }) {
         </button>
       </div>
       {error && <p role="alert">{error}</p>}
-      <div className="folder-manager">{tree()}</div>
+      <div
+        className="folder-manager"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => drop(e, null)}
+      >
+        {tree()}
+        <p className="folder-drop-hint">
+          Drop a folder here to move it to the top level.
+        </p>
+      </div>
     </>
   );
 }

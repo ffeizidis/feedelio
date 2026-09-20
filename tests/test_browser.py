@@ -115,6 +115,39 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("textbox", name="Folder name").fill("Engineering")
         page.get_by_role("button", name="Create folder").click()
         expect(page.locator(".folder-group-heading").filter(has_text="Engineering")).to_be_visible()
+        # The parent picker can create a folder inline; duplicate names are refused.
+        page.get_by_role("button", name="+ New folder", exact=True).click()
+        page.get_by_role("textbox", name="Folder name").fill("engineering")
+        page.get_by_role("button", name="Create folder").click()
+        expect(page.locator("dialog p[role=alert]")).to_contain_text("already exists")
+        page.get_by_role("textbox", name="Folder name").fill("Compilers")
+        page.get_by_role("combobox", name="Put folder under").select_option("+")
+        page.get_by_role("textbox", name="New folder name").fill("Computing")
+        page.get_by_role("button", name="Create", exact=True).click()
+        expect(page.get_by_role("combobox", name="Put folder under")).to_have_value(
+            page.locator("option", has_text="Computing").first.get_attribute("value")
+        )
+        page.get_by_role("button", name="Create folder").click()
+        nested = page.locator(".folder-group", has_text="Computing").locator(
+            ".folder-nested .folder-group-heading"
+        )
+        expect(nested).to_have_count(1)
+        expect(nested).to_contain_text("Compilers")
+        # Folders nest by drag and drop too, and drop back to the top level.
+        page.locator(".folder-group-heading", has_text="Engineering").drag_to(
+            page.locator(".folder-group-heading", has_text="Computing")
+        )
+        expect(
+            page.locator(".folder-group", has_text="Computing").locator(
+                ".folder-nested .folder-group-heading"
+            )
+        ).to_have_count(2)
+        page.locator(".folder-group-heading", has_text="Compilers").drag_to(page.locator(".folder-drop-hint"))
+        expect(
+            page.locator(".folder-group", has_text="Computing").locator(
+                ".folder-nested .folder-group-heading"
+            )
+        ).to_have_count(1)
         page.get_by_role("button", name="Rules", exact=True).click()
         page.get_by_role("button", name="+ Skip YouTube Shorts", exact=True).click()
         expect(page.locator(".rule-row")).to_have_count(1)

@@ -1944,6 +1944,30 @@ mark {
   margin-bottom: 8px;
   font-size: 13px;
 }
+.folder-group-heading[draggable="true"] {
+  cursor: grab;
+}
+.folder-drop-hint {
+  margin: 12px 16px 0;
+  font: 12.5px var(--mono);
+  color: var(--faint);
+}
+.inline-folder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.inline-folder input {
+  flex: 1;
+  min-width: 160px;
+}
+.inline-folder p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--error);
+  font-size: 13px;
+}
 .folder-nested {
   padding-left: 22px;
 }

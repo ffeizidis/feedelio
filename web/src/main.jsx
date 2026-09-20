@@ -64,6 +64,7 @@ import {
   AppearanceSettings,
   FolderSheet,
   FolderManager,
+  FolderSelect,
   feedClass,
 } from "./redesign.jsx";
 
@@ -1762,13 +1763,12 @@ function Subscribe({ data, act, onClose }) {
         </Field>
         <div className="form-grid">
           <Field label="Folder">
-            <select value={folder} onChange={(e) => setFolder(e.target.value)}>
-              {data.folders.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </select>
+            <FolderSelect
+              data={data}
+              act={act}
+              value={folder}
+              onChange={setFolder}
+            />
           </Field>
           <Field label="Custom title (optional)">
             <input
@@ -2578,7 +2578,8 @@ function Library({
 }
 
 function FeedEditor({ feed: f, data, act, onBack }) {
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""),
+    [folderId, setFolderId] = useState(f.folder_id);
   async function save(e) {
     e.preventDefault();
     const p = Object.fromEntries(new FormData(e.currentTarget));
@@ -2652,13 +2653,13 @@ function FeedEditor({ feed: f, data, act, onBack }) {
           <input name="title" defaultValue={f.title} />
         </Field>
         <Field label="Folder">
-          <select name="folder_id" defaultValue={f.folder_id}>
-            {data.folders.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.name}
-              </option>
-            ))}
-          </select>
+          <FolderSelect
+            data={data}
+            act={act}
+            name="folder_id"
+            value={folderId}
+            onChange={setFolderId}
+          />
         </Field>
         <Field
           label="Refresh interval (minutes)"

@@ -641,6 +641,37 @@ dialog::backdrop {
   gap: 10px;
   align-items: center;
 }
+.feed-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0 14px;
+  font: 12.5px/1.4 var(--mono);
+}
+.feed-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feed-links a:hover,
+.feed-info small a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.feed-open {
+  padding: 0;
+  text-align: left;
+  display: block;
+  max-width: 100%;
+}
+.feed-info small a {
+  color: inherit;
+}
 .favicon,
 .favicon-letter {
   width: 16px;

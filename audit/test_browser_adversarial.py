@@ -413,12 +413,12 @@ def test_video_is_click_to_load_and_uses_configured_invidious(lab):
     p.on("request", lambda r: external.append(r.url) if "youtube" in r.url else None)
     assert p.locator("iframe").count() == 0
     p.get_by_role("button", name=re.compile("Play video")).click()
-    expect(p.locator("iframe")).to_have_attribute("src", "https://www.youtube-nocookie.com/embed/abcdefghijk")
+    expect(p.locator("iframe")).to_have_attribute("src", "https://www.youtube-nocookie.com/embed/abcdefghijk?autoplay=1")
     lab.manager("Data & connections")
     p.get_by_role("textbox", name=re.compile("^Invidious instance")).fill(lab.publisher)
     p.get_by_role("button", name="Save settings", exact=True).click()
     lab.close()
-    expect(p.locator("iframe")).to_have_attribute("src", lab.publisher + "/embed/abcdefghijk")
+    expect(p.locator("iframe")).to_have_attribute("src", lab.publisher + "/embed/abcdefghijk?autoplay=1")
 
 
 @pytest.mark.features(37, 39, 40, 42, 43)

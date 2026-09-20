@@ -309,7 +309,7 @@ def test_rate_limited_extraction_is_retried_later(core, site):
     assert "Full text." in core.article(article)["body"]
 
 
-def test_youtube_entries_keep_their_description_and_learn_shorts(core, site, monkeypatch):
+def test_youtube_entries_keep_their_description_and_learn_shorts(core, site, monkeypatch, tmp_path):
     from feedelio import core as module
 
     base, routes, _ = site
@@ -333,7 +333,11 @@ Second paragraph</media:description></media:group></entry>
     def probe(url, options=None):
         probed.append(url)
         short = "abcdefghijk" in url
-        return dict(short=short, url="https://www.youtube.com/shorts/abcdefghijk" if short else url)
+        return dict(
+            short=short,
+            url="https://www.youtube.com/shorts/abcdefghijk" if short else url,
+            duration=58 if short else 3725,
+        )
 
     monkeypatch.setattr(module, "probe_video", probe)
     monkeypatch.setattr(module, "extract", lambda *a, **k: pytest.fail("Video pages must not be extracted"))
@@ -350,6 +354,14 @@ Second paragraph</media:description></media:group></entry>
     body = core.article(short["id"])["body"]
     assert '<a href="https://example.test/"' in body and "<p>Second paragraph</p>" in body
     assert core.article(long["id"])["embed"] == "https://www.youtube-nocookie.com/embed/zyxwvutsrqp"
+    assert core.article(long["id"])["duration"] == 3725 and core.article(short["id"])["duration"] == 58
+    # A backup from before the duration column restores with the default.
+    backup = core.backup()
+    for row in backup["tables"]["articles"]:
+        del row["duration"]
+    with Core(tmp_path / "older") as restored:
+        assert restored.restore(backup)["restored"] == 2
+        assert restored.article(long["id"])["duration"] == 0
 
 
 def test_site_scraper_and_feed_backfill(core, site):

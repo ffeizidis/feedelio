@@ -199,6 +199,7 @@ def test_opml_nested_roundtrip_and_backup_restore(core, site, tmp_path):
 
 def test_retention_protects_unread_saved_archive_and_tombstones(core, site):
     id = subscription(core, site)
+    core.save_settings({"retention_days": 90})  # Retention is off by default.
     a = core.articles()["items"][0]
     old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
     with core.db:

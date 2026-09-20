@@ -1715,6 +1715,15 @@ class Core:
             feeds=self.rows("""SELECT f.title,count(a.id) total,coalesce(sum(a.read),0) read,
               coalesce(sum(a.starred),0) saved FROM feeds f LEFT JOIN articles a ON a.feed_id=f.id AND a.deleted=0
               WHERE f.deleted=0 GROUP BY f.id ORDER BY read DESC"""),
+            archive=self.archive_size(),
+        )
+
+    def archive_size(self):
+        """Library size on disk: both databases (with WAL) and downloaded episodes."""
+        files = [p for p in self.root.glob("*.sqlite*")] + list((self.root / "downloads").glob("*"))
+        return dict(
+            bytes=sum(p.stat().st_size for p in files if p.is_file()),
+            downloads=sum(1 for p in (self.root / "downloads").iterdir() if p.is_file()),
         )
 
     def chrome_sync(self, entries):

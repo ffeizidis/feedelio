@@ -382,3 +382,11 @@ def test_feeds_extract_full_articles_by_default(core, site):
     assert core.one(jobs)["n"] == 1
     core.refresh(core.subscribe(base + "/atom", options={"extract": True})["id"])
     assert core.one(jobs)["n"] == 2
+
+
+def test_statistics_report_archive_size(core, site):
+    subscription(core, site)
+    (core.root / "downloads" / "episode").write_bytes(b"x" * 1000)
+    archive = core.statistics()["archive"]
+    assert archive["downloads"] == 1
+    assert archive["bytes"] > 1000 + (core.root / "app.sqlite").stat().st_size

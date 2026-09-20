@@ -81,6 +81,23 @@ try {
 } catch {
   /* An unavailable session store only loses the reading position. */
 }
+// The address names the page, so a reload or a shared link lands on the same
+// stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /history, /a/<article>.
+function readLocation() {
+  const [, kind, id] = location.pathname.split("/");
+  if (kind === "a" && id) return { selected: id };
+  if (kind === "f" && id) return { view: "all", scope: { feed_id: id } };
+  if (kind === "d" && id) return { view: "all", scope: { folder_id: id } };
+  if (["starred", "bookmarks", "history"].includes(kind)) return { view: kind };
+  return {};
+}
+function pageUrl(selected, view, scope) {
+  if (selected) return "/a/" + selected;
+  if (scope.feed_id) return "/f/" + scope.feed_id;
+  if (scope.folder_id) return "/d/" + scope.folder_id;
+  return view === "all" ? "/" : "/" + view;
+}
+const start = Object.keys(resume).length ? resume : readLocation();
 async function api(path, body) {
   const response = await fetch(
     "/api/" + path,
@@ -368,11 +385,11 @@ function App() {
     queryFn: () => api("overview"),
     refetchInterval: 10000,
   });
-  const [view, setView] = useState(resume.view || "all"),
-    [scope, setScope] = useState(resume.scope || {}),
-    [q, setQ] = useState(resume.q || ""),
-    [offset, setOffset] = useState(resume.offset || 0);
-  const [selected, setSelected] = useState(resume.selected || null),
+  const [view, setView] = useState(start.view || "all"),
+    [scope, setScope] = useState(start.scope || {}),
+    [q, setQ] = useState(start.q || ""),
+    [offset, setOffset] = useState(start.offset || 0);
+  const [selected, setSelected] = useState(start.selected || null),
     [collapsed, setCollapsed] = useState({}),
     [modal, setModal] = useState(
       new URLSearchParams(location.search).has("subscribe")
@@ -387,7 +404,7 @@ function App() {
   const [token, setToken] = useState("");
   const [paneWidth, setPaneWidth] = useState(null);
   const [listWidth, setListWidth] = useState(null),
-    [searchOpen, setSearchOpen] = useState(!!resume.q),
+    [searchOpen, setSearchOpen] = useState(!!start.q),
     [titlesOnly, setTitlesOnly] = useState(false),
     [focused, setFocused] = useState(null),
     [viewport, setViewport] = useState(window.innerWidth);
@@ -399,18 +416,30 @@ function App() {
   }, []);
   // The reader and the library each push a history entry, so Back (keyboard,
   // toolbar or a mouse side button) closes them instead of leaving Feedelio.
-  const layers = useRef({ stack: [], skip: 0, close: {} });
+  const layers = useRef({ stack: [], skip: 0, close: {}, url: "/" });
   useLayer(layers, "article", !!selected, () => setSelected(null));
   useLayer(layers, "modal", !!modal, () => setModal(null));
   useEffect(() => {
     const pop = () => {
       const state = layers.current;
-      if (state.skip) state.skip--;
-      else state.close[state.stack.pop()]?.();
+      if (state.skip) {
+        state.skip--;
+        // Landed on an entry we named earlier, possibly under the closed layer's
+        // own address after a reload: name it for what is shown now.
+        if (location.pathname + location.search !== state.url)
+          history.replaceState(history.state, "", state.url);
+      } else state.close[state.stack.pop()]?.();
     };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, []);
+  // After the layer above has pushed its entry, name it.
+  useEffect(() => {
+    const url = pageUrl(selected, view, scope) + location.search;
+    layers.current.url = url;
+    if (location.pathname + location.search !== url)
+      history.replaceState(history.state, "", url);
+  }, [selected, view, scope]);
   const searchRef = useRef(null),
     readingRef = useRef(null),
     navigation = useRef({ key: null, items: [], index: -1 });
@@ -460,6 +489,14 @@ function App() {
   }, [tabTitle, data]);
   const items = articles.data?.items || [],
     a = article.data;
+  // An article opened by its address shows within its feed's stream.
+  const placed = useRef(!start.selected);
+  useEffect(() => {
+    if (!placed.current && a && a.id === start.selected) {
+      placed.current = true;
+      if (!scope.feed_id && !scope.folder_id) setScope({ feed_id: a.feed_id });
+    }
+  }, [a]);
   // The hide-read preference can arrive after the first keypress. Reset on the
   // user's toggle, not on its asynchronous response, so it cannot erase history.
   const navigationKey = JSON.stringify([
@@ -949,17 +986,7 @@ function App() {
             </button>
           </nav>
           <div className="subscriptions-heading">
-            <button
-              onClick={() =>
-                setCollapsed({ ...collapsed, library: !collapsed.library })
-              }
-            >
-              <ChevronDown
-                size={13}
-                className={collapsed.library ? "rotate" : ""}
-              />{" "}
-              FEEDS
-            </button>
+            <h2>FEEDS</h2>
             <div>
               <IconButton
                 icon={settings.sidebar_unread_only ? EyeOff : Eye}
@@ -985,20 +1012,18 @@ function App() {
               />
             </div>
           </div>
-          {!collapsed.library && (
-            <div className="folder-tree">
-              {data.feeds.length ? (
-                folderTree()
-              ) : (
-                <button
-                  className="add-first"
-                  onClick={() => setModal("subscribe")}
-                >
-                  <Plus size={16} /> Add your first subscription
-                </button>
-              )}
-            </div>
-          )}
+          <div className="folder-tree">
+            {data.feeds.length ? (
+              folderTree()
+            ) : (
+              <button
+                className="add-first"
+                onClick={() => setModal("subscribe")}
+              >
+                <Plus size={16} /> Add your first subscription
+              </button>
+            )}
+          </div>
         </div>
       </aside>
       <section className="stream-pane" aria-label="Article stream">
@@ -2497,28 +2522,7 @@ function Library({
                   <p>Downloaded podcast episodes will appear here.</p>
                 </div>
               )}
-              <h3>Background jobs</h3>
-              <QueueSummary queue={data.queue || {}} />
-              {data.jobs
-                .filter((j) => j.status === "failed")
-                .map((j) => (
-                  <div className="inline-error" key={j.id}>
-                    {j.kind}: {j.error}
-                    <button
-                      onClick={() =>
-                        submit(() =>
-                          act(
-                            "enqueue",
-                            { kind: j.kind, payload: j.payload },
-                            "Job queued again",
-                          ),
-                        )
-                      }
-                    >
-                      Retry
-                    </button>
-                  </div>
-                ))}
+              <JobsLog data={data} act={act} submit={submit} />
             </>
           )}
           {tab === "statistics" && (
@@ -2817,6 +2821,58 @@ function FeedEditor({ feed: f, data, act, onBack }) {
         settings.
       </p>
     </form>
+  );
+}
+
+// The worker's log: one collapsed frame with the backlog summary and the last
+// thirty jobs, each with the time it last moved.
+function JobsLog({ data, act, submit }) {
+  const stamp = (value) =>
+    new Date(value).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  const subject = (j) =>
+    j.payload.feed_id
+      ? data.feeds.find((f) => f.id === j.payload.feed_id)?.title || "a feed"
+      : j.payload.url
+        ? j.payload.url.split("/").pop()?.slice(0, 50)
+        : j.payload.id
+          ? "an article"
+          : "";
+  return (
+    <details className="jobs-log">
+      <summary>Background jobs</summary>
+      <QueueSummary queue={data.queue || {}} />
+      {data.jobs.map((j) => (
+        <div className="job-row" key={j.id}>
+          <time dateTime={j.updated}>{stamp(j.updated)}</time>
+          <span>
+            {j.kind} {subject(j)}
+            {j.error && <small>{j.error}</small>}
+          </span>
+          <span className={"job-" + j.status}>{j.status}</span>
+          {j.status === "failed" && (
+            <button
+              onClick={() =>
+                submit(() =>
+                  act(
+                    "enqueue",
+                    { kind: j.kind, payload: j.payload },
+                    "Job queued again",
+                  ),
+                )
+              }
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      ))}
+    </details>
   );
 }
 

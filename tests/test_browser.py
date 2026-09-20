@@ -1,5 +1,6 @@
 """Desktop acceptance test against the built React app and the real API."""
 
+import re
 import socket
 import threading
 import time
@@ -174,6 +175,21 @@ def test_desktop_reading_workflow(core, site, web_server):
         assert page.url.startswith(web_server)
         page.locator(".feed-line", has_text="The Sunday Journal").click()
         expect(page).to_have_title("feedelio - The Sunday Journal")
+        # Every page has an address, so a reload lands where the reader was.
+        expect(page).to_have_url(web_server + "/f/" + feed)
+        page.reload()
+        expect(page).to_have_title("feedelio - The Sunday Journal")
+        page.locator(".article-row .row-title").first.click()
+        expect(page).to_have_url(re.compile(r"/a/[0-9a-f]+$"))
+        page.go_back()
+        expect(page).to_have_url(web_server + "/f/" + feed)
+        expect(page.locator(".reading-content h1")).to_have_count(0)
+        page.locator(".article-row .row-title").first.click()
+        page.reload()
+        expect(page.locator(".reading-content h1")).to_be_visible()
+        page.keyboard.press("Escape")
+        expect(page.locator(".reading-content h1")).to_have_count(0)
+        expect(page.locator(".subscriptions-heading h2")).to_have_text("FEEDS")
         page.get_by_role("button", name="Bookmark this feed").click()
         expect(page.get_by_role("button", name="Remove bookmark")).to_be_visible()
         page.get_by_role("button", name="Bookmarked feeds").click()
@@ -197,6 +213,12 @@ def test_desktop_reading_workflow(core, site, web_server):
         expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()
         expect(page.locator(".feed-check")).to_contain_text("Last checked")
         expect(page.locator(".feed-check button")).to_be_disabled()  # Still queued.
+        page.get_by_role("button", name="Downloads", exact=True).click()
+        log = page.locator("details.jobs-log")
+        expect(log.locator(".job-row").first).to_be_hidden()  # Collapsed until opened.
+        log.locator("summary").click()
+        expect(log.locator(".job-row").first.locator("time")).to_have_attribute("datetime", re.compile(r"^\d{4}-"))
+        expect(log.locator(".job-row", has_text="backfill The Sunday Journal")).to_be_visible()
         page.get_by_role("button", name="Activity", exact=True).click()
         expect(page.get_by_text("Archive size · 3 articles")).to_be_visible()
         page.go_back()

@@ -10,6 +10,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY feedelio/ ./feedelio/
+# Large wheels on a slow link exceed uv's 30-second default and fail the build.
+ENV UV_HTTP_TIMEOUT=300
 RUN uv sync --frozen --no-dev --no-editable && \
     useradd --uid 10001 --create-home feedelio && \
     mkdir -p /data && chown feedelio:feedelio /data

@@ -144,6 +144,8 @@ def test_dedup_updated_entries_and_index(core, site):
     core.ingest(id, "one", "Publisher correction", original["url"], "<p>Heliotrope correction</p>")
     assert core.articles(q="heliotrope")["total"] == 1
     assert core.articles(q="independent")["total"] == 0
+    with pytest.raises(ValueError, match="Already subscribed"):
+        core.subscribe(site[0] + "/rss ")
     second = core.subscribe(site[0] + "/json")["id"]
     core.ingest(second, "copy", "Publisher correction", site[0] + "/copy", "<p>Heliotrope correction</p>")
     assert core.articles()["total"] == 1

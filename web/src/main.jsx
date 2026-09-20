@@ -2191,11 +2191,11 @@ function Library({
                                 </button>
                                 <small>
                                   <a
-                                    href={f.site_url || f.url}
+                                    href={siteOf(f)}
                                     target="_blank"
                                     rel="noreferrer"
                                   >
-                                    {f.site_url || f.url}
+                                    {siteOf(f)}
                                   </a>
                                 </small>
                               </span>
@@ -2575,6 +2575,16 @@ function Library({
       )}
     </dialog>
   );
+}
+
+// Feeds that never declared a site link still belong to one: their origin.
+function siteOf(f) {
+  if (f.site_url) return f.site_url;
+  try {
+    return new URL(f.url).origin + "/";
+  } catch {
+    return f.url;
+  }
 }
 
 function FeedEditor({ feed: f, data, act, onBack }) {

@@ -445,9 +445,13 @@ class Core:
         raise ValueError("No feed found. Try an explicit feed URL or configure a site scraper.")
 
     def subscribe(self, url, folder_id="inbox", title="", options=None):
-        safe_url(url)
+        url = safe_url(url)
         options = self.validate_options(options or {})
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            existing = self.rows("SELECT title FROM feeds WHERE url=? AND deleted=0", (url,))
+            if existing:
+                raise ValueError(f"Already subscribed to this feed as {existing[0]['title']}.")
             return self._subscribe(url, folder_id, title, options)
 
     def _subscribe(self, url, folder_id, title, options):

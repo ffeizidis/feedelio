@@ -232,7 +232,7 @@ class Core:
         return record(row)
 
     @contextmanager
-    def reader(self, options=None, moved=None):
+    def reader(self, options=None, moved=None, durations=None):
         options = options or {}
 
         def plugin(reader):
@@ -241,7 +241,7 @@ class Core:
                 http = parser.get_retriever("http://")
                 http.session.trust_env = False
                 for mime, parsers in parser.parsers_by_mime_type.items():
-                    parser.parsers_by_mime_type[mime] = [(q, BoundedParser(p)) for q, p in parsers]
+                    parser.parsers_by_mime_type[mime] = [(q, BoundedParser(p, durations)) for q, p in parsers]
                 http.session.mount("http://", GuardAdapter(options.get("cookie_origin")))
                 http.session.mount("https://", GuardAdapter(options.get("cookie_origin")))
                 http.session.headers["User-Agent"] = options.get("user_agent") or "Feedelio/0.1"
@@ -890,6 +890,7 @@ class Core:
         transcript="",
         tags=None,
         read=False,
+        duration=0,
     ):
         # Publisher links reach window.open and <a href>; keep only web URLs.
         url = clean_url(url) if urlsplit(url).scheme in ("http", "https") else ""
@@ -921,6 +922,8 @@ class Core:
                 a["words"] += len(transcript.split())
             if enclosures is not None:
                 a["enclosures"] = enclosures
+            if duration and not a["duration"]:
+                a["duration"] = duration
             if a["guid"] == guid:
                 a.update(
                     title=title or a["title"],
@@ -936,7 +939,7 @@ class Core:
                 a = self.apply_rules(a)
             if a != previous:
                 self.db.execute(
-                    "UPDATE articles SET title=?,author=?,body=?,text=?,words=?,fingerprint=?,tags=?,read=?,starred=?,deleted=?,url=?,published=?,enclosures=?,transcript=? WHERE id=?",
+                    "UPDATE articles SET title=?,author=?,body=?,text=?,words=?,fingerprint=?,tags=?,read=?,starred=?,deleted=?,url=?,published=?,enclosures=?,transcript=?,duration=? WHERE id=?",
                     (
                         a["title"],
                         a["author"],
@@ -952,6 +955,7 @@ class Core:
                         a["published"],
                         json.dumps(a["enclosures"]),
                         a["transcript"],
+                        a["duration"],
                         a["id"],
                     ),
                 )
@@ -979,6 +983,7 @@ class Core:
             fingerprint=digest,
             extracted=0,
             state_changed=None,
+            duration=duration,
         )
         if len(title) >= 20:
             recent = self.rows(
@@ -1083,7 +1088,8 @@ class Core:
                 new = self.scrape(f, read, extract)
             else:
                 moved = []
-                with self.reader(options, moved) as reader:
+                durations = {}
+                with self.reader(options, moved, durations) as reader:
                     reader.add_feed(f["url"], exist_ok=True)
                     reader.update_feed(f["url"])
                     rf = reader.get_feed(f["url"])
@@ -1140,6 +1146,7 @@ class Core:
                             [dataclasses.asdict(e) for e in entry.enclosures],
                             transcript=transcript,
                             read=read,
+                            duration=durations.get(entry.id, 0),
                         )
                         if self.db.total_changes > before:
                             new += 1
@@ -1468,7 +1475,8 @@ class Core:
             state["pending"] = pending
             state["offset"] += len(pending)
         else:
-            entries, next_url = archives.feed_page(data, final, headers)
+            durations = {}
+            entries, next_url = archives.feed_page(data, final, headers, durations)
             for e in entries:
                 body = next(
                     (
@@ -1489,6 +1497,7 @@ class Core:
                     (e.published or e.updated).isoformat() if (e.published or e.updated) else None,
                     [dataclasses.asdict(x) for x in e.enclosures],
                     read=read,
+                    duration=durations.get(e.id, 0),
                 )
                 state["articles"] += (
                     self.one("SELECT count(*) n FROM articles WHERE feed_id=?", (feed_id,))["n"] - before

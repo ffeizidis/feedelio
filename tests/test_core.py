@@ -7,6 +7,7 @@ import pytest
 
 from feedelio.core import Core
 from feedelio.core.content import embed_url, safe_url, same_feed, sanitize
+from feedelio.core.reader_extensions import duration_seconds
 
 
 def subscription(core, site, path="/rss"):
@@ -199,7 +200,7 @@ def test_provided_podcast_transcript_and_download(core, site):
     routes["/podcast"] = (
         200,
         {"Content-Type": "application/rss+xml"},
-        f'''<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0"><channel><title>Podcast</title><description>Audio</description><item><guid>episode1</guid><title>An episode</title><link>{base}/episode</link><enclosure url="{base}/audio.mp3" type="audio/mpeg" length="4"/><podcast:transcript url="{base}/transcript.txt" type="text/plain"/></item></channel></rss>''',
+        f'''<rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0"><channel><title>Podcast</title><description>Audio</description><item><guid>episode1</guid><title>An episode</title><link>{base}/episode</link><itunes:duration xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">1:02:03</itunes:duration><enclosure url="{base}/audio.mp3" type="audio/mpeg" length="4"/><podcast:transcript url="{base}/transcript.txt" type="text/plain"/></item></channel></rss>''',
     )
     routes["/transcript.txt"] = (
         200,
@@ -210,6 +211,8 @@ def test_provided_podcast_transcript_and_download(core, site):
     subscription(core, site, "/podcast")
     a = core.article(core.articles()["items"][0]["id"])
     assert "astrobiology" in a["transcript"]
+    assert a["duration"] == 3723  # itunes:duration, shown as length instead of reading time
+    assert duration_seconds("62:03") == 3723 and duration_seconds("90") == 90 and duration_seconds("x") == 0
     assert core.articles(q="astrobiology")["total"] == 1
     job = core.enqueue("download", {"article_id": a["id"], "url": base + "/audio.mp3"})
     for _ in range(10):

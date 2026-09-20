@@ -12,7 +12,23 @@ from reader._parser.feedparser import FeedparserParser, _process_feed, feedparse
 from .content import fingerprint
 
 
+def duration_seconds(value):
+    """Seconds from an itunes:duration ("1:02:03", "62:03" or "3723"); 0 when unparseable."""
+    parts = str(value or "").strip().split(":")
+    try:
+        seconds = 0
+        for part in parts:
+            seconds = seconds * 60 + float(part)
+    except ValueError:
+        return 0
+    return int(seconds) if seconds > 0 else 0
+
+
 class ExtendedFeedparser(FeedparserParser):
+    def __init__(self, durations=None):
+        # reader's Entry has no room for itunes:duration; hand it back by entry id.
+        self.durations = {} if durations is None else durations
+
     def __call__(self, url, resource, headers=None):
         result = feedparser.parse(
             resource,
@@ -27,6 +43,10 @@ class ExtendedFeedparser(FeedparserParser):
         for entry in result.entries:
             if not entry.get("id") and not entry.get("link"):
                 entry["id"] = fingerprint(entry.get("title", ""), entry.get("summary", ""))
+            if entry.get("itunes_duration"):
+                self.durations[entry.get("id") or entry.get("link")] = duration_seconds(
+                    entry["itunes_duration"]
+                )
             transcripts = entry.get("podcast_transcript", [])
             if isinstance(transcripts, dict):
                 transcripts = [transcripts]
@@ -40,8 +60,8 @@ class ExtendedFeedparser(FeedparserParser):
 
 
 class BoundedParser:
-    def __init__(self, parser):
-        self.parser = ExtendedFeedparser() if isinstance(parser, FeedparserParser) else parser
+    def __init__(self, parser, durations=None):
+        self.parser = ExtendedFeedparser(durations) if isinstance(parser, FeedparserParser) else parser
 
     def __call__(self, url, resource, headers=None):
         data = resource.read(8_000_001)

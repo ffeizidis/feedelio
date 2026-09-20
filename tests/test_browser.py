@@ -79,6 +79,11 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("button", name="esc to close", exact=True).click()
         page.locator(".article-row", has_text="A sixty-second essay").locator(".row-title").click()
         expect(page.locator(".article-details summary")).to_have_text("1:00 video")
+        expect(page).to_have_title("feedelio - A sixty-second essay")
+        expect(page.locator(".article-kicker")).to_contain_text("The Sunday Journal·January 1, 2020")
+        expect(
+            page.locator(".article-row", has_text="A sixty-second essay").locator(".row-date")
+        ).to_have_text("6y")
         expect(page.locator(".video-box iframe")).to_have_attribute(  # No click-to-load step.
             "src", "https://www.youtube-nocookie.com/embed/abcdefghijk"
         )
@@ -126,6 +131,13 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.go_back()
         expect(page.locator(".reading-content h1")).to_have_count(0)
         assert page.url.startswith(web_server)
+        page.locator(".feed-line", has_text="The Sunday Journal").click()
+        expect(page).to_have_title("feedelio - The Sunday Journal")
+        page.get_by_role("button", name="Bookmark this feed").click()
+        expect(page.get_by_role("button", name="Remove bookmark")).to_be_visible()
+        page.get_by_role("button", name="Bookmarked feeds").click()
+        expect(page).to_have_title("feedelio - Bookmarked feeds")
+        expect(page.locator(".article-row")).to_have_count(3)
         page.locator(".feed-line", has_text="The Sunday Journal").click()
         core.enqueue("backfill", {"feed_id": feed})
         expect(page.get_by_role("button", name="Archive progress")).to_contain_text(

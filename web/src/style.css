@@ -1557,9 +1557,15 @@ mark {
   font: 12.5px/1 var(--mono);
 }
 .reader-meta-actions {
-  margin-left: auto;
   display: flex;
   gap: 16px;
+}
+.article-kicker time,
+.kicker-sep {
+  color: var(--muted);
+}
+.icon-button.bookmarked svg {
+  fill: currentColor;
 }
 .article-details {
   margin-top: 8px;

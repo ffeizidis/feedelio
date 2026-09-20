@@ -364,6 +364,20 @@ Second paragraph</media:description></media:group></entry>
         assert restored.article(long["id"])["duration"] == 0
 
 
+def test_bookmarked_feeds_form_their_own_stream(core, site):
+    base, _, _ = site
+    id = subscription(core, site)
+    other = core.subscribe(base + "/json")["id"]
+    core.refresh(other)
+    assert core.articles(view="bookmarks")["total"] == 0
+    core.edit_feed(id, options={"bookmarked": True})
+    stream = core.articles(view="bookmarks")
+    assert stream["total"] == 1 and stream["items"][0]["feed_id"] == id
+    assert core.overview()["counts"]["bookmarks"] == 1
+    with pytest.raises(ValueError, match="boolean"):
+        core.edit_feed(id, options={"bookmarked": "yes"})
+
+
 def test_site_scraper_and_feed_backfill(core, site):
     base, routes, _ = site
     routes["/no-feed"] = (

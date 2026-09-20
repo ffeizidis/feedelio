@@ -49,6 +49,7 @@ import {
   Video,
   Eye,
   EyeOff,
+  Bookmark,
   Image,
   Loader2,
 } from "lucide-react";
@@ -108,11 +109,17 @@ async function api(path, body) {
   return data;
 }
 const cmd = (name, payload = {}) => api("actions/" + name, { payload });
-const date = (value) =>
-  new Date(value).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+// Age in the list: now, 1m, 10m, 2h, 3d, 3w, 7mn, 2y.
+const ago = (value) => {
+  const minutes = Math.max(0, (Date.now() - new Date(value).getTime()) / 60000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${Math.floor(minutes)}m`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h`;
+  if (minutes < 10080) return `${Math.floor(minutes / 1440)}d`;
+  if (minutes < 43800) return `${Math.floor(minutes / 10080)}w`;
+  if (minutes < 525600) return `${Math.floor(minutes / 43800)}mn`;
+  return `${Math.floor(minutes / 525600)}y`;
+};
 const fullDate = (value) =>
   new Date(value).toLocaleDateString(undefined, {
     month: "long",
@@ -400,6 +407,25 @@ function App() {
     enabled: !!selected,
     refetchInterval: 10000,
   });
+  // The tab names what is open: the article, the library, or the stream.
+  const tabTitle =
+    selected && article.data?.title
+      ? article.data.title
+      : modal
+        ? "Manage library"
+        : q
+          ? "Search results"
+          : data?.feeds.find((f) => f.id === scope.feed_id)?.title ||
+            data?.folders.find((f) => f.id === scope.folder_id)?.name ||
+            {
+              all: "All articles",
+              starred: "Saved for later",
+              bookmarks: "Bookmarked feeds",
+              history: "Recently read",
+            }[view];
+  useEffect(() => {
+    if (data) document.title = "feedelio - " + tabTitle;
+  }, [tabTitle, data]);
   const items = articles.data?.items || [],
     a = article.data;
   // The hide-read preference can arrive after the first keypress. Reset on the
@@ -718,6 +744,7 @@ function App() {
       {
         all: "All articles",
         starred: "Saved for later",
+        bookmarks: "Bookmarked feeds",
         history: "Recently read",
       }[view];
   const count = articles.data?.total || 0;
@@ -856,6 +883,12 @@ function App() {
             {[
               ["all", Inbox, "All articles", data.counts.unread],
               ["starred", Star, "Saved", data.counts.starred],
+              [
+                "bookmarks",
+                Bookmark,
+                "Bookmarked feeds",
+                data.counts.bookmarks,
+              ],
               ["history", Clock3, "History", null],
             ].map(([id, Icon, label, n]) => (
               <button
@@ -994,6 +1027,36 @@ function App() {
               checked={!!settings.hide_read}
               onChange={(v) => pref("hide_read", v)}
             />
+            {activeFeed && (
+              <IconButton
+                icon={Bookmark}
+                className={
+                  "icon-button " +
+                  (activeFeed.options.bookmarked ? "bookmarked" : "")
+                }
+                label={
+                  activeFeed.options.bookmarked
+                    ? "Remove bookmark"
+                    : "Bookmark this feed"
+                }
+                aria-pressed={!!activeFeed.options.bookmarked}
+                onClick={() =>
+                  run(
+                    "edit_feed",
+                    {
+                      id: activeFeed.id,
+                      options: {
+                        ...activeFeed.options,
+                        bookmarked: !activeFeed.options.bookmarked,
+                      },
+                    },
+                    activeFeed.options.bookmarked
+                      ? "Bookmark removed"
+                      : "Feed bookmarked",
+                  )
+                }
+              />
+            )}
             <IconButton
               icon={CheckCheck}
               label="Mark this stream as read"
@@ -1174,8 +1237,12 @@ function App() {
                   <ArticleMarks item={item} />
                   <Highlight text={item.title} query={q} />
                 </button>
-                <time className="row-date" dateTime={item.published}>
-                  {date(item.published)}
+                <time
+                  className="row-date"
+                  dateTime={item.published}
+                  title={fullDate(item.published)}
+                >
+                  {ago(item.published)}
                 </time>
                 {(settings.list_display === "preview" || searchOpen) && (
                   <p className="row-snippet">
@@ -1272,9 +1339,18 @@ function App() {
                     >
                       {a.feed_title}
                     </button>
-                  </div>
-                  <div className="reader-meta">
+                    <span className="kicker-sep">·</span>
                     <time dateTime={a.published}>{fullDate(a.published)}</time>
+                  </div>
+                  <details className="article-details">
+                    <summary>
+                      {a.duration
+                        ? `${clock(a.duration)} video`
+                        : `${a.reading_minutes} min read · ${a.words.toLocaleString()} words`}
+                    </summary>
+                    {a.author && <p>By {a.author}</p>}
+                  </details>
+                  <div className="reader-meta">
                     <span className="reader-meta-actions">
                       <button
                         className="read-toggle"
@@ -1308,14 +1384,6 @@ function App() {
                       </button>
                     </span>
                   </div>
-                  <details className="article-details">
-                    <summary>
-                      {a.duration
-                        ? `${clock(a.duration)} video`
-                        : `${a.reading_minutes} min read · ${a.words.toLocaleString()} words`}
-                    </summary>
-                    {a.author && <p>By {a.author}</p>}
-                  </details>
                   <hr className="reader-rule" />
                   {a.embed && (
                     <div className="video-box">
@@ -2529,6 +2597,7 @@ function FeedEditor({ feed: f, data, act, onBack }) {
             ...f.options,
             interval: p.interval ? Number(p.interval) : null,
             archive: p.archive === "on",
+            bookmarked: p.bookmarked === "on",
             extract: p.extract === "on",
             selector: p.selector,
             user_agent: p.user_agent,
@@ -2610,6 +2679,14 @@ function FeedEditor({ feed: f, data, act, onBack }) {
           <input name="tags" defaultValue={f.tags.join(", ")} />
         </Field>
       </div>
+      <label className="check-field">
+        <input
+          type="checkbox"
+          name="bookmarked"
+          defaultChecked={f.options.bookmarked}
+        />
+        <span>Bookmark this feed (listed under Bookmarked feeds)</span>
+      </label>
       <label className="check-field">
         <input
           type="checkbox"

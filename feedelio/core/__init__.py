@@ -359,8 +359,9 @@ class Core:
             scope = self.descendants(f["id"])
             f["unread"] = sum(feed["unread"] for feed in feeds if feed["folder_id"] in scope)
         counts = self.one("""SELECT count(*) total,coalesce(sum(a.read=0),0) unread,
-          coalesce(sum(a.starred=1),0) starred FROM articles a JOIN feeds f ON f.id=a.feed_id
-          WHERE a.deleted=0 AND f.deleted=0""")
+          coalesce(sum(a.starred=1),0) starred,
+          coalesce(sum(a.read=0 AND json_extract(f.options,'$.bookmarked')=1),0) bookmarks
+          FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE a.deleted=0 AND f.deleted=0""")
         return dict(
             feeds=feeds,
             folders=folders,
@@ -455,6 +456,7 @@ class Core:
             "backfill_url",
             "retention_days",
             "transcript_selector",
+            "bookmarked",
         }
         if set(options) - allowed:
             raise ValueError("Unknown feed option.")
@@ -467,7 +469,7 @@ class Core:
             isinstance(days, bool) or not isinstance(days, (int, float)) or not 0 <= days <= 36500
         ):
             raise ValueError("Feed retention must be 0–36500 days, or null for the global setting.")
-        for key in ("archive", "extract"):
+        for key in ("archive", "extract", "bookmarked"):
             if key in options and not isinstance(options[key], bool):
                 raise ValueError(f"{key} must be a boolean.")
         for key in ("selector", "scrape_selector", "scrape_link", "transcript_selector"):
@@ -558,6 +560,8 @@ class Core:
             where.append("a.starred=1")
         if view == "history":
             where.append("EXISTS(SELECT 1 FROM events e WHERE e.article_id=a.id AND e.kind='open')")
+        if view == "bookmarks":
+            where.append("json_extract(f.options,'$.bookmarked')=1")
         if tag:
             where.append("EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value=?)")
             args.append(tag)

@@ -100,6 +100,34 @@ def record(row):
     return result
 
 
+def parse_feed(url, data, headers):
+    """Parse fetched bytes with the retrieval parsers; raises when they are not a feed."""
+    parser = JSONFeedParser() if data.lstrip().startswith(b"{") else ExtendedFeedparser()
+    feed, entries = parser(url, io.BytesIO(data), headers)
+    list(entries)
+    return feed
+
+
+def feed_guesses(page_url, page):
+    """Same-site feed URLs worth one request each: page links, robots.txt, then convention."""
+    host = urlsplit(page_url).hostname
+    hint = regex.compile(r"rss|atom|feed|\.xml$", regex.I)
+    hrefs = [a["href"] for a in BeautifulSoup(page, "html.parser").select("a[href]")]
+    try:
+        robots = fetch(urljoin(page_url, "/robots.txt"), max_bytes=100_000)[0].decode(errors="replace")
+        hrefs += [line.split(":", 1)[1] for line in robots.splitlines() if line.lower().startswith("allow:")]
+    except Exception:
+        pass
+    hrefs += ["/feed", "/rss", "/feed.xml", "/rss.xml", "/atom.xml", "/index.xml", "/feeds/posts/default"]
+    guesses = []
+    for href in hrefs:
+        url = urljoin(page_url, href.strip())
+        parts = urlsplit(url)
+        if parts.hostname == host and "sitemap" not in parts.path and hint.search(parts.path):
+            guesses.append(url)
+    return list(dict.fromkeys(guesses))[:12]
+
+
 def retry_at(exc, attempts):
     """When to retry after a publisher pushed back: exponential, or its Retry-After."""
     from email.utils import parsedate_to_datetime
@@ -394,15 +422,22 @@ class Core:
             return [{"url": link.href, "title": link.title or link.href} for link in links]
         # Validate a direct feed with the same parsers as retrieval, without
         # subscribing or fetching it a second time. MIME alone is not evidence.
-        parser = JSONFeedParser() if data.lstrip().startswith(b"{") else ExtendedFeedparser()
         try:
-            feed, entries = parser(final, io.BytesIO(data), headers)
-            list(entries)
-        except Exception as error:
-            raise ValueError(
-                "No feed found. Try an explicit feed URL or configure a site scraper."
-            ) from error
-        return [{"url": final, "title": feed.title or final}]
+            return [{"url": final, "title": parse_feed(final, data, headers).title or final}]
+        except Exception:
+            pass
+        # Sites that advertise no feed often still serve one at a conventional
+        # path, link it from the page body, or allow-list it in robots.txt.
+        for candidate in feed_guesses(final, data):
+            try:
+                body, url, head = fetch(candidate)
+                feed = parse_feed(url, body, head)
+            except Exception:
+                continue
+            page_title = BeautifulSoup(data, "html.parser").title
+            title = feed.title or (page_title.get_text(strip=True) if page_title else "") or url
+            return [{"url": url, "title": title}]
+        raise ValueError("No feed found. Try an explicit feed URL or configure a site scraper.")
 
     def subscribe(self, url, folder_id="inbox", title="", options=None):
         safe_url(url)

@@ -17,10 +17,30 @@ def test_discovery_validates_direct_feeds(core, site, path):
 
 @pytest.mark.parametrize("mime", ["text/html", "application/rss+xml", "application/feed+json"])
 def test_discovery_rejects_feedless_pages_even_with_feed_mime(core, site, mime):
-    site[1]["/not-a-feed"] = (200, {"Content-Type": mime}, "<html><h1>No feeds here</h1></html>")
+    base, routes, _ = site
+    routes["/not-a-feed"] = (200, {"Content-Type": mime}, "<html><h1>No feeds here</h1></html>")
+    # The page advertises nothing, but the site serves a feed at a conventional path.
+    assert core.discover(base + "/not-a-feed") == [{"url": base + "/rss", "title": "Test journal"}]
+    del routes["/rss"]
     with pytest.raises(ValueError, match="No feed found"):
-        core.discover(site[0] + "/not-a-feed")
+        core.discover(base + "/not-a-feed")
     assert core.feeds() == []
+
+
+def test_discovery_follows_page_links_and_robots_allow_lines(core, site):
+    base, routes, _ = site
+    feed = routes.pop("/rss")
+    routes["/feeds/global.xml"] = (200, feed[1], feed[2].replace("<title>Test journal</title>", ""))
+    routes["/robots.txt"] = (200, {}, "Disallow: /feeds/\nAllow: /feeds/global.xml\n")
+    routes["/"] = (
+        200,
+        {"Content-Type": "text/html"},
+        "<html><title>Every</title><a href='/about'>x</a></html>",
+    )
+    assert core.discover(base + "/") == [{"url": base + "/feeds/global.xml", "title": "Every"}]
+    routes["/"] = (200, {"Content-Type": "text/html"}, "<html><a href='/feeds/global.xml'>RSS</a></html>")
+    del routes["/robots.txt"]
+    assert core.discover(base + "/")[0]["url"] == base + "/feeds/global.xml"
 
 
 @pytest.mark.parametrize(

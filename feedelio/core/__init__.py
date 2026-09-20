@@ -906,6 +906,13 @@ class Core:
             "SELECT * FROM articles WHERE feed_id=? AND (guid=? OR (url=? AND url!='') OR fingerprint=?) LIMIT 1",
             (feed_id, guid, url, digest),
         )
+        # Some podcast feeds link every episode to the show's home page; two
+        # episodes with their own ids and different audio are not one article.
+        if existing and existing[0]["guid"] != guid and existing[0]["fingerprint"] != digest:
+            audio = {e.get("href") for e in enclosures or []}
+            theirs = {e.get("href") for e in existing[0]["enclosures"]}
+            if audio and theirs and audio.isdisjoint(theirs):
+                existing = []
         if existing:
             a = existing[0]
             previous = a.copy()

@@ -159,6 +159,23 @@ def test_dedup_updated_entries_and_index(core, site):
     assert core.articles(q='" OR title: * !!')["total"] == 0
 
 
+def test_episodes_sharing_the_show_page_link_stay_separate(core, site):
+    id = subscription(core, site)
+    home = site[0] + "/podcast"
+
+    def mp3(n):
+        return [{"href": site[0] + f"/{n}.mp3", "type": "audio/mpeg"}]
+
+    first = core.ingest(id, "ep-1", "Episode one", home, "<p>Notes one</p>", enclosures=mp3(1))
+    second = core.ingest(id, "ep-2", "Episode two", home, "<p>Notes two</p>", enclosures=mp3(2))
+    assert first != second
+    # The same episode reissued with a new id but the same audio is still one article.
+    assert core.ingest(id, "ep-2-v2", "Episode two", home, "<p>Notes two</p>", enclosures=mp3(2)) == second
+    # A plain article that only moved to a new id keeps matching by link.
+    post = core.ingest(id, "post-a", "A longer article title", site[0] + "/post", "<p>Body</p>")
+    assert core.ingest(id, "post-b", "A longer article title", site[0] + "/post", "<p>Edited</p>") == post
+
+
 def test_extraction_rules_transcript_and_markdown(core, site):
     id = subscription(core, site)
     a = core.articles()["items"][0]

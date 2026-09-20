@@ -432,4 +432,7 @@ def test_archive_pacing_is_per_site_so_different_sites_advance_together(core, si
     steps = {id: core.one("SELECT * FROM jobs WHERE id=?", (id,))["result"]["pages"] for id in (job_a, job_b)}
     assert steps == {job_a: 1, job_b: 1}  # Neither site waited for the other's minute.
     assert set(core._archive_hosts()) == {"127.0.0.1", "localhost"}
+    from feedelio.core import backfill as archives
+
+    assert archives.interval("youtube.com") == 10 and archives.interval("localhost") == 60
     assert not core.tick()  # Both sites are inside their minute; the worker idles.

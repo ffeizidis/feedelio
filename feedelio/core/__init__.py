@@ -1520,7 +1520,7 @@ class Core:
         try:
             state = self.backfill(**job["payload"], state=state)
             state["attempts"] = 0
-            state["not_before"] = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+            state["not_before"] = self._archive_pause(job).isoformat()
             status = "queued" if state["next_url"] or state["pending"] else "done"
             error = None
         except Exception as exc:
@@ -1549,6 +1549,10 @@ class Core:
         hosts = self.rows("SELECT value FROM settings WHERE key='archive_hosts'")
         hosts = json.loads(hosts[0]["value"]) if hosts else {}
         return {h: t for h, t in hosts.items() if t > now()}
+
+    def _archive_pause(self, job):
+        host = archives.host(job["result"], job.get("feed_url"))
+        return datetime.now(timezone.utc) + timedelta(seconds=archives.interval(host))
 
     def _pace_host(self, job, until):
         hosts = self._archive_hosts()
@@ -1652,7 +1656,7 @@ class Core:
                 return False
             self.db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (now(), job["id"]))
             if job["kind"] == "backfill":
-                self._pace_host(job, (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat())
+                self._pace_host(job, self._archive_pause(job).isoformat())
         try:
             p = job["payload"]
             if job["kind"] == "refresh":

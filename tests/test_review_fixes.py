@@ -67,6 +67,7 @@ def test_refresh_preserves_rename_and_interval_edits(core, site, monkeypatch):
 def test_state_sensitive_selection_holds_write_lock(core, site, monkeypatch, operation):
     feed, article = item(core, site)
     core.change_articles([article], read=True)
+    core.save_settings({"retention_days": 90})  # Retention is off by default.
     with core.db:
         core.db.execute(
             "UPDATE articles SET added=?", ((datetime.now(timezone.utc) - timedelta(days=100)).isoformat(),)

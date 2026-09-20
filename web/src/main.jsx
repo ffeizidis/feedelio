@@ -2636,7 +2636,7 @@ function DataSettings({ data, act, submit }) {
       >
         <Field
           label="Retain read articles for (days)"
-          hint="0 keeps everything. Unread, saved and archive-feed articles are protected."
+          hint="0 (the default) keeps everything. Unread, saved and archive-feed articles are protected."
         >
           <input
             name="retention_days"

@@ -488,6 +488,7 @@ def test_retention_and_archive_backfill_through_ui(lab):
     )
     with lab.core.db:
         lab.core.db.execute("UPDATE articles SET added=?", (stamp(24 * 200),))
+    lab.core.save_settings({"retention_days": 90})  # Retention is off by default.
     lab.show()
     p = lab.page
     lab.open_title("Old saved")

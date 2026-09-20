@@ -76,7 +76,7 @@ def test_four_formats_opml_polling_conditional_get_and_bad_feed(lab):
     assert child["parent_id"] == parent["id"]
     assert next(f for f in lab.api("overview")["feeds"] if f["title"] == "Broken")["health"] == "error"
     p.keyboard.press("Escape")
-    p.get_by_role("button", name="Refresh feeds (R)", exact=True).click()
+    p.get_by_role("button", name="Update now", exact=True).first.click()
     lab.finish_jobs()
     headers = [r["headers"] for r in lab.requests if r["path"] == "/rss"][-1]
     assert headers.get("If-None-Match") == '"v1"'

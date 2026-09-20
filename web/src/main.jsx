@@ -233,6 +233,34 @@ function IconButton({ icon: Icon, label, ...props }) {
     </button>
   );
 }
+// Queues a refresh of one feed (or the whole library) and stays busy until the
+// worker has run it, so a second click cannot pile up duplicate jobs.
+function UpdateNow({ data, act, feedId, checked }) {
+  const pending = (data.jobs || []).some(
+    (j) =>
+      j.kind === "refresh" &&
+      (j.status === "queued" || j.status === "running") &&
+      (!feedId || !j.payload.feed_id || j.payload.feed_id === feedId),
+  );
+  return (
+    <button
+      type="button"
+      className="update-now"
+      disabled={pending}
+      title={checked ? "Last checked " + ago(checked) + " ago" : undefined}
+      onClick={() =>
+        act(
+          "enqueue",
+          { kind: "refresh", payload: feedId ? { feed_id: feedId } : {} },
+          "Update queued",
+        )
+      }
+    >
+      <RefreshCw size={13} className={pending ? "spin" : ""} />
+      {pending ? "Updating…" : "Update now"}
+    </button>
+  );
+}
 function Field({ label, children, hint }) {
   return (
     <label className="field">
@@ -668,7 +696,7 @@ function App() {
             kind: "refresh",
             payload: scope.feed_id ? { feed_id: scope.feed_id } : {},
           },
-          "Refresh queued",
+          "Update queued",
         );
       else if (e.key === "a") setModal("subscribe");
       else if (e.key === "?") setModal("keys");
@@ -1023,6 +1051,12 @@ function App() {
               {searchOpen ? "results" : count === 1 ? "article" : "articles"} ·{" "}
               {articles.data?.unread || 0} unread
             </span>
+            <UpdateNow
+              data={data}
+              act={run}
+              feedId={scope.feed_id}
+              checked={activeFeed?.checked}
+            />
             <Switch
               label="Unread only"
               checked={!!settings.hide_read}
@@ -1117,21 +1151,6 @@ function App() {
             >
               <ArrowUpDown size={13} />
               {settings.sort === "oldest" ? "Oldest first" : "Newest first"}
-            </button>
-            <button
-              aria-label="Refresh feeds (R)"
-              onClick={() =>
-                run(
-                  "enqueue",
-                  {
-                    kind: "refresh",
-                    payload: scope.feed_id ? { feed_id: scope.feed_id } : {},
-                  },
-                  "Refresh queued",
-                )
-              }
-            >
-              <RefreshCw size={13} />
             </button>
           </div>
         </div>
@@ -2099,7 +2118,7 @@ function Library({
                             act(
                               "bulk_feeds",
                               { ids, action: "refresh" },
-                              "Refresh queued",
+                              "Update queued",
                             ),
                           )
                         }
@@ -2645,6 +2664,18 @@ function FeedEditor({ feed: f, data, act, onBack }) {
             <ExternalLink size={13} /> {f.site_url}
           </a>
         )}
+      </p>
+      <p className="feed-check">
+        <UpdateNow data={data} act={act} feedId={f.id} checked={f.checked} />
+        <span>
+          {f.checked
+            ? "Last checked " +
+              ago(f.checked) +
+              " ago · next in about " +
+              f.interval +
+              " min"
+            : "Not checked yet"}
+        </span>
       </p>
       {feedIssue(f) && <p className="inline-error">{feedIssue(f).note}</p>}
       <BackfillStatus

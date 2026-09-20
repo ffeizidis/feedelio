@@ -180,6 +180,14 @@ def test_desktop_reading_workflow(core, site, web_server):
         expect(page).to_have_title("feedelio - Bookmarked feeds")
         expect(page.locator(".article-row")).to_have_count(3)
         page.locator(".feed-line", has_text="The Sunday Journal").click()
+        # Update now queues one refresh and stays busy until the worker takes it
+        # (the subscription's own initial refresh is still queued: no worker here).
+        expect(page.get_by_role("button", name="Updating…")).to_be_disabled()
+        core.db.execute("UPDATE jobs SET status='done' WHERE kind='refresh'")
+        core.db.commit()
+        page.get_by_role("button", name="Update now", exact=True).click()
+        expect(page.get_by_role("button", name="Updating…")).to_be_disabled()
+        assert core.rows("SELECT count(*) c FROM jobs WHERE kind='refresh' AND status='queued'")[0]["c"] == 1
         core.enqueue("backfill", {"feed_id": feed})
         expect(page.get_by_role("button", name="Archive progress")).to_contain_text(
             "Archive in progress · 0 pages · 0 older articles", timeout=15000
@@ -187,6 +195,8 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("button", name="Manage feed: The Sunday Journal").click()
         expect(page.get_by_role("heading", name="Manage library")).to_be_visible()
         expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()
+        expect(page.locator(".feed-check")).to_contain_text("Last checked")
+        expect(page.locator(".feed-check button")).to_be_disabled()  # Still queued.
         page.get_by_role("button", name="Activity", exact=True).click()
         expect(page.get_by_text("Archive size · 3 articles")).to_be_visible()
         page.go_back()

@@ -1222,6 +1222,34 @@ dialog::backdrop {
 .stream-meta > span:first-child {
   flex: 1;
 }
+.update-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+}
+.update-now:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ink);
+}
+.update-now:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.feed-check {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
 .stream-meta .icon-button {
   padding: 5px 8px;
 }

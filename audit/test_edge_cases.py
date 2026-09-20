@@ -70,7 +70,7 @@ def test_feed_fetch_uses_real_http_proxy(lab):
         p.get_by_role("textbox", name="HTTP proxy", exact=True).fill(f"http://127.0.0.1:{proxy.server_port}")
         p.get_by_role("button", name="Save feed settings", exact=True).click()
         lab.close()
-        p.get_by_role("button", name="Refresh feeds (R)", exact=True).click()
+        p.get_by_role("button", name="Update now", exact=True).first.click()
         lab.finish_jobs()
         assert lab.publisher + "/feed" in calls
     finally:
@@ -217,7 +217,7 @@ def test_linkless_hash_entries_remain_distinct(lab):
     lab.close()
     lab.page.reload()
     expect(lab.page.locator(".article-row")).to_have_count(2)
-    lab.page.get_by_role("button", name="Refresh feeds (R)", exact=True).click()
+    lab.page.get_by_role("button", name="Update now", exact=True).first.click()
     lab.finish_jobs()
     lab.page.reload()
     expect(lab.page.locator(".article-row")).to_have_count(2)

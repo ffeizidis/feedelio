@@ -104,7 +104,7 @@ All requested areas have an implementation. Integrations that depend on a publis
 | Z | Undo last change |
 | / | Search |
 | O | Open original |
-| R | Queue refresh |
+| R | Update now (this feed, or the whole library) |
 | a / Shift+A | Add subscription / mark current stream read |
 | Enter / Shift+Enter | Open selected article in reader / original page |
 | N / P | Next / previous feed |

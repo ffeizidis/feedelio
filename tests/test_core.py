@@ -283,6 +283,32 @@ def test_refresh_jobs_run_before_an_older_extraction_backlog(core, site):
     assert ran[0]["id"] == refresh and ran[0]["kind"] == "refresh"
 
 
+def test_rate_limited_extraction_is_retried_later(core, site):
+    _, routes, _ = site
+    subscription(core, site)
+    article = core.articles()["items"][0]["id"]
+    routes["/article"] = (429, {"Retry-After": "120"}, "slow down")
+    core.db.execute("UPDATE jobs SET status='done'")
+    core.db.commit()
+    job = core.enqueue("extract", {"article_id": article})["id"]
+    for _ in range(6):  # The tick also seeds purge and archive jobs; drain them.
+        core.tick()
+    row = core.one("SELECT * FROM jobs WHERE id=?", (job,))
+    assert row["status"] == "queued" and row["result"]["attempts"] == 1 and "429" in row["error"]
+    assert row["result"]["not_before"] > (datetime.now(timezone.utc) + timedelta(seconds=100)).isoformat()
+    assert core.one("SELECT * FROM jobs WHERE id=?", (job,))["result"]["attempts"] == 1  # Not due yet.
+    routes["/article"] = (
+        200,
+        {"Content-Type": "text/html"},
+        "<html><body><article><p>" + "Full text. " * 40 + "</p></article></body></html>",
+    )
+    core.db.execute("UPDATE jobs SET result=json_set(result,'$.not_before','2000-01-01') WHERE id=?", (job,))
+    core.db.commit()
+    core.tick()
+    assert core.one("SELECT status FROM jobs WHERE id=?", (job,))["status"] == "done"
+    assert "Full text." in core.article(article)["body"]
+
+
 def test_site_scraper_and_feed_backfill(core, site):
     base, routes, _ = site
     routes["/no-feed"] = (

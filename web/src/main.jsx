@@ -2626,6 +2626,7 @@ function DataSettings({ data, act, submit }) {
                   retention_days: Number(p.retention_days),
                   rsshub: p.rsshub,
                   invidious: p.invidious,
+                  new_feed_read: p.new_feed_read === "on",
                 },
               },
               "Library settings saved",
@@ -2645,6 +2646,17 @@ function DataSettings({ data, act, submit }) {
             defaultValue={data.settings.retention_days}
           />
         </Field>
+        <label className="check-field">
+          <input
+            type="checkbox"
+            name="new_feed_read"
+            defaultChecked={data.settings.new_feed_read}
+          />
+          <span>
+            Start new subscriptions read. Existing posts and backfilled history
+            are marked read; only posts published later count as unread.
+          </span>
+        </label>
         <Field label="RSSHub instance">
           <input name="rsshub" type="url" defaultValue={data.settings.rsshub} />
         </Field>

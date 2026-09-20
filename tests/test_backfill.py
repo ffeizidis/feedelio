@@ -300,3 +300,48 @@ def test_removed_archive_post_keeps_preview_and_continues(core, site, status):
     assert article["text"] == "Its public archive preview"
     assert "archive-preview" in article["tags"]
     assert not article["extracted"]
+
+
+def wordpress_page(routes, path, index):
+    routes[path] = (
+        200,
+        {"Content-Type": "application/rss+xml"},
+        f"""<rss version="2.0"><channel><title>Blog</title><generator>https://wordpress.org/?v=6.8</generator>
+        <item><guid isPermaLink="false">wp-{index}</guid><title>WordPress post number {index}</title>
+        <description>Body {index}</description></item></channel></rss>""",
+    )
+
+
+def test_wordpress_feeds_paginate_without_next_links_and_history_starts_read(core, site):
+    base, routes, _ = site
+    wordpress_page(routes, "/feed", 1)
+    wordpress_page(routes, "/feed?paged=2", 2)
+    wordpress_page(routes, "/feed?paged=3", 3)  # /feed?paged=4 is a 404, as on WordPress.
+    feed = core.subscribe(base + "/feed")["id"]
+    core.refresh(feed)
+    assert core.articles()["total"] == 1 and core.articles()["unread"] == 0
+    with core.db:
+        core.db.execute("UPDATE jobs SET status='done'")
+    job = core.enqueue("backfill", {"feed_id": feed})["id"]
+    state = run(core, job)["result"]
+    assert state["pages"] == 1 and state["next_url"] == base + "/feed?paged=2"
+    for _ in range(3):
+        due(core, job)
+        result = run(core, job)
+    assert result["status"] == "done" and result["error"] is None
+    assert result["result"]["pages"] == 3 and result["result"]["articles"] == 2
+    assert result["result"]["message"] == "All exposed archive pages processed."
+    assert core.articles()["total"] == 3 and core.articles()["unread"] == 0
+    # Only posts published after the first refresh count as unread.
+    wordpress_page(routes, "/feed", 4)
+    core.refresh(feed)
+    assert core.articles()["unread"] == 1
+
+
+def test_new_feed_read_setting_off_keeps_first_refresh_unread(core, site):
+    core.save_settings({"new_feed_read": False})
+    feed = core.subscribe(site[0] + "/rss")["id"]
+    core.refresh(feed)
+    assert core.articles()["unread"] == 1
+    with pytest.raises(ValueError, match="boolean"):
+        core.save_settings({"new_feed_read": "yes"})

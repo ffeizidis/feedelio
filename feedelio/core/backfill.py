@@ -47,6 +47,12 @@ def host(state, feed_url):
     return (urlsplit(url).hostname or "").removeprefix("www.")
 
 
+def interval(host):
+    """Seconds between archive requests to one site: a small blog is asked once a
+    minute, YouTube (one watch page per video) serves far more without noticing."""
+    return 10 if host == "youtube.com" else 60
+
+
 def youtube_channel(url):
     """The channel id of a YouTube uploads feed, which lists only the newest 15 videos."""
     parts = urlsplit(url)

@@ -2853,8 +2853,8 @@ function QueueSummary({ queue }) {
         );
       })}
       <p className="muted">
-        Each site is asked for one archive page a minute, so backfills on
-        different sites advance side by side.
+        Each site is asked for one archive page a minute (YouTube every ten
+        seconds), so backfills on different sites advance side by side.
       </p>
     </div>
   );

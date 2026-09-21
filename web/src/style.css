@@ -79,6 +79,65 @@ input[type="range"] {
   padding: 0;
   accent-color: var(--green);
 }
+.select {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+.select > button {
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+}
+.select > button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select > button > svg {
+  flex: none;
+  color: var(--muted);
+}
+.select > button.placeholder > span {
+  color: var(--muted);
+}
+.select-menu {
+  position: fixed;
+  z-index: 30;
+  width: max-content;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px #0004;
+  font-size: 13px;
+}
+.select-menu li {
+  padding: 7px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.select-menu li.focused {
+  background: var(--hover);
+}
+.select-menu li[aria-selected="true"] {
+  color: var(--green);
+  font-weight: 600;
+}
+.select-menu li[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
 :focus-visible {
   outline: 2px solid var(--green);
   outline-offset: 3px;
@@ -432,7 +491,7 @@ dialog::backdrop {
   letter-spacing: 0.1px;
 }
 .field input,
-.field select,
+.field .select,
 .field textarea {
   width: 100%;
   font-size: 13px;
@@ -607,7 +666,7 @@ dialog::backdrop {
 .manager-heading > span {
   flex: 1;
 }
-.manager-heading select {
+.manager-heading .select {
   margin-right: 10px;
   font-size: 13px;
 }
@@ -710,8 +769,8 @@ dialog::backdrop {
   font-size: 13px;
   flex-wrap: wrap;
 }
-.bulk-bar select {
-  padding: 6px;
+.bulk-bar .select > button {
+  padding: 6px 10px;
   font-size: 13px;
 }
 .bulk-bar form {
@@ -736,7 +795,7 @@ dialog::backdrop {
   font-size: 13px;
   padding: 8px;
 }
-.folder-editor select {
+.folder-editor .select {
   width: 30%;
   font-size: 13px;
   padding: 8px;
@@ -2026,7 +2085,7 @@ mark {
   color: var(--faint);
   cursor: grab;
 }
-.folder-child select {
+.folder-child .select {
   grid-column: 2/5;
   margin-bottom: 8px;
   font-size: 13px;

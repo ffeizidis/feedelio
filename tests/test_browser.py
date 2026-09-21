@@ -33,6 +33,12 @@ def web_server(core):
     sock.close()
 
 
+def pick(page, label, option):
+    """Choose an option from one of the app's dropdowns."""
+    page.get_by_role("combobox", name=label).click()
+    page.get_by_role("listbox", name=label).get_by_role("option", name=option, exact=True).click()
+
+
 def test_desktop_reading_workflow(core, site, web_server):
     base, _, _ = site
     folder = core.save_folder("Ideas & culture")["id"]
@@ -107,9 +113,9 @@ def test_desktop_reading_workflow(core, site, web_server):
         expect(page.get_by_role("heading", name="Rules", exact=True)).to_be_visible()
         page.get_by_role("button", name="Feeds", exact=True).click()
         # A feed opened from the list is a layer of its own: Back returns to the list.
-        page.get_by_role("combobox", name="Filter feeds by status").select_option("error")
+        pick(page, "Filter feeds by status", "Failing (0)")
         expect(page.locator(".feed-table .feed-info")).to_have_count(0)
-        page.get_by_role("combobox", name="Filter feeds by status").select_option("all")
+        pick(page, "Filter feeds by status", "All feeds")
         expect(page.locator(".feed-info a", has_text=base)).to_have_attribute("href", base)
         page.locator(".feed-open", has_text="The Sunday Journal").click()
         expect(page.get_by_role("textbox", name="Archive feed URL", exact=True)).to_be_visible()
@@ -130,12 +136,10 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("button", name="Create folder").click()
         expect(page.locator("dialog p[role=alert]")).to_contain_text("already exists")
         page.get_by_role("textbox", name="Folder name").fill("Compilers")
-        page.get_by_role("combobox", name="Put folder under").select_option("+")
+        pick(page, "Put folder under", "+ New folder…")
         page.get_by_role("textbox", name="New folder name").fill("Computing")
         page.get_by_role("button", name="Create", exact=True).click()
-        expect(page.get_by_role("combobox", name="Put folder under")).to_have_value(
-            page.locator("option", has_text="Computing").first.get_attribute("value")
-        )
+        expect(page.get_by_role("combobox", name="Put folder under")).to_have_text("Computing")
         page.get_by_role("button", name="Create folder").click()
         # Folders start collapsed; the same name is fine under a different parent.
         expect(page.locator(".folder-group-heading", has_text="Compilers")).to_have_count(0)
@@ -144,7 +148,21 @@ def test_desktop_reading_workflow(core, site, web_server):
         ).click()
         page.get_by_role("button", name="+ New folder", exact=True).click()
         page.get_by_role("textbox", name="Folder name").fill("Engineering")
-        page.get_by_role("combobox", name="Put folder under").select_option(label="Computing")
+        # The picker lists the tree: a folder's children sit indented under it.
+        page.get_by_role("combobox", name="Put folder under").click()
+        options = page.get_by_role("listbox", name="Put folder under").get_by_role("option")
+        expect(options.nth(1)).to_have_text("Computing")
+        expect(options.nth(2)).to_have_text("Compilers")
+        assert int(options.nth(2).evaluate("e => parseInt(e.style.paddingLeft)")) > int(
+            options.nth(1).evaluate("e => parseInt(e.style.paddingLeft)")
+        )
+        # A picker stays open until an option is chosen: the mouse button
+        # coming up over it, or a refresh re-rendering the page, does not close it.
+        page.mouse.up()
+        page.wait_for_timeout(300)
+        expect(options.nth(1)).to_be_visible()
+        options.nth(1).click()
+        expect(page.get_by_role("listbox", name="Put folder under")).to_have_count(0)
         page.get_by_role("button", name="Create folder").click()
         expect(page.locator(".folder-group-heading", has_text="Engineering")).to_have_count(2)
         nested = page.locator(".folder-group", has_text="Computing").locator(

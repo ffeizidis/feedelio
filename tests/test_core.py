@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from feedelio.core import Core
+from feedelio.core import BACKUP_TABLES, Core, now
 from feedelio.core.content import embed_url, safe_url, same_feed, sanitize
 from feedelio.core.reader_extensions import duration_seconds
 
@@ -343,6 +343,33 @@ def test_chrome_read_state_conflicts_and_undo(core, site):
     assert not core.chrome_sync([entry])["entries"][0]["hasBeenRead"]
     entry.update(lastUpdateTime=int(datetime.now(timezone.utc).timestamp() * 1000) + 30000, hasBeenRead=True)
     assert core.chrome_sync([entry])["entries"][0]["hasBeenRead"]
+
+
+def test_feed_health_is_decided_once_for_the_whole_app(core, site):
+    # The library filter, the sidebar and the feed list all read this verdict,
+    # so a feed with nothing new for a fortnight is stale everywhere at once.
+    id = subscription(core, site)
+    assert core.feeds()[0]["health"] == "healthy"
+    with core.db:
+        core.db.execute("UPDATE feeds SET last_article=? WHERE id=?", (now(days=-15), id))
+    assert core.feeds()[0]["health"] == "stale"
+    with core.db:
+        core.db.execute("UPDATE feeds SET last_article=? WHERE id=?", (now(), id))
+        core.db.execute("UPDATE articles SET tags='[\"paywall\"]' WHERE feed_id=?", (id,))
+    assert core.feeds()[0]["health"] == "partial"
+    with core.db:
+        core.db.execute("UPDATE feeds SET checked=NULL,last_article=NULL WHERE id=?", (id,))
+        core.db.execute("UPDATE articles SET tags='[]' WHERE feed_id=?", (id,))
+    assert core.feeds()[0]["health"] == "pending"
+
+
+def test_backup_and_restore_agree_on_the_tables_they_carry(core, site):
+    subscription(core, site)
+    backup = core.backup()
+    assert set(backup["tables"]) == set(BACKUP_TABLES)
+    with Core(core.root / "copy") as copy:
+        copy.restore(backup)
+        assert copy.feeds()[0]["url"] == core.feeds()[0]["url"]
 
 
 def test_worker_health_failures_and_unique_jobs(core, site):

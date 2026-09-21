@@ -2,6 +2,24 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 export const feedClass = (feed) => `feed-hue-${feed?.options?.hue ?? 0}`;
 
+// Every form here runs one action and shows what went wrong in place.
+export function useSubmit() {
+  const [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  async function submit(fn) {
+    setError("");
+    setBusy(true);
+    try {
+      return (await fn()) ?? true; // Never undefined, so callers can test success.
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return { error, setError, busy, submit };
+}
+
 export function ResizeHandle({
   label,
   value,
@@ -555,22 +573,20 @@ export function FolderSelect({
 }) {
   const [creating, setCreating] = useState(false),
     [draft, setDraft] = useState(""),
-    [error, setError] = useState("");
+    { error, submit } = useSubmit();
   async function create() {
     if (!draft.trim()) return;
-    try {
-      const created = await act(
+    const created = await submit(() =>
+      act(
         "save_folder",
         { name: draft.trim(), parent_id: null },
         "Folder created",
-      );
-      onChange(created.id);
-      setCreating(false);
-      setDraft("");
-      setError("");
-    } catch (e) {
-      setError(e.message);
-    }
+      ),
+    );
+    if (!created) return;
+    onChange(created.id);
+    setCreating(false);
+    setDraft("");
   }
   return (
     <>
@@ -615,7 +631,7 @@ export function FolderSelect({
 }
 
 export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
-  const [error, setError] = useState(""),
+  const { error, submit } = useSubmit(),
     [parent, setParent] = useState(folder?.parent_id || "");
   const descendants = new Set(folder ? [folder.id] : []);
   for (let i = 0; i < data.folders.length; i++)
@@ -628,20 +644,20 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
         onSubmit={async (e) => {
           e.preventDefault();
           const values = new FormData(e.currentTarget);
-          try {
-            await act(
-              "save_folder",
-              {
-                ...(folder ? { id: folder.id } : {}),
-                name: values.get("name"),
-                parent_id: values.get("parent") || null,
-              },
-              "Folder saved",
-            );
+          if (
+            await submit(() =>
+              act(
+                "save_folder",
+                {
+                  ...(folder ? { id: folder.id } : {}),
+                  name: values.get("name"),
+                  parent_id: values.get("parent") || null,
+                },
+                "Folder saved",
+              ),
+            )
+          )
             onClose();
-          } catch (e) {
-            setError(e.message);
-          }
         }}
       >
         <Field label="Folder name">
@@ -677,12 +693,8 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
                   )
                 )
                   return;
-                try {
-                  await act("delete_folder", { id: folder.id });
+                if (await submit(() => act("delete_folder", { id: folder.id })))
                   onClose();
-                } catch (e) {
-                  setError(e.message);
-                }
               }}
             >
               Delete folder
@@ -703,31 +715,29 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
 export function FolderManager({ data, act, onEdit, onNew }) {
   const [opened, setOpened] = useState({}),
     [dragged, setDragged] = useState(null),
-    [error, setError] = useState("");
+    { error, submit } = useSubmit();
   async function move(feed, folder) {
-    try {
-      await act(
-        "bulk_feeds",
-        { ids: [feed], action: "move", folder_id: folder },
-        "Feed moved",
-      );
+    if (
+      await submit(() =>
+        act(
+          "bulk_feeds",
+          { ids: [feed], action: "move", folder_id: folder },
+          "Feed moved",
+        ),
+      )
+    )
       setDragged(null);
-    } catch (e) {
-      setError(e.message);
-    }
   }
-  async function nest(id, parent) {
+  function nest(id, parent) {
     const folder = data.folders.find((f) => f.id === id);
     if (!folder || folder.parent_id === parent) return;
-    try {
-      await act(
+    submit(() =>
+      act(
         "save_folder",
         { id, name: folder.name, parent_id: parent },
         parent ? "Folder nested" : "Folder moved to top level",
-      );
-    } catch (e) {
-      setError(e.message);
-    }
+      ),
+    );
   }
   function drop(e, target) {
     e.preventDefault();

@@ -3,9 +3,8 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import local_client
 
-from feedelio.api import app
 from feedelio.core.content import local_frame_origin, sanitize
 
 
@@ -162,7 +161,7 @@ def test_download_metadata_identifies_each_enclosure(core, site):
 
 
 def test_csp_only_adds_the_configured_local_http_origin(core):
-    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000)) as client:
+    with local_client() as client:
         assert "frame-src https:;" in client.get("/").headers["Content-Security-Policy"]
         core.save_settings({"invidious": "http://127.0.0.1:9876/player"})
         policy = client.get("/").headers["Content-Security-Policy"]

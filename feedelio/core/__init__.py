@@ -7,7 +7,6 @@ transactional projection containing processed content and user-owned state.
 from __future__ import annotations
 
 import base64
-import dataclasses
 import io
 import json
 import math
@@ -35,16 +34,19 @@ from reader.discover import from_http_response
 from . import backfill as archives
 from .content import (
     UnresolvedHost,
+    bounded,
     clean_url,
     embed_url,
     extract,
     fetch,
     fingerprint,
+    is_youtube,
     local_frame_origin,
     looks_like_html,
     origin,
     plain,
     probe_video,
+    request_headers,
     request_options,
     safe_url,
     same_feed,
@@ -53,11 +55,12 @@ from .content import (
     video_id,
 )
 from .network import PinnedAdapter, http_client
-from .reader_extensions import BoundedParser, ExtendedFeedparser
+from .reader_extensions import BoundedParser, ExtendedFeedparser, entry_fields
 
 
-def now():
-    return datetime.now(timezone.utc).isoformat()
+def now(**delta):
+    """The current UTC time as ISO text, optionally shifted (now(days=-30))."""
+    return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
 
 
 def uid():
@@ -92,6 +95,29 @@ DEFAULTS = dict(
     collapsed_folders=[],
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
+# Articles are always read through their feed, so deleted feeds hide their articles.
+ARTICLES = "FROM articles a JOIN feeds f ON f.id=a.feed_id"
+# A feed with nothing new for this long is reported as stale, not healthy.
+STALE_DAYS = 14
+
+
+def is_uid(id):
+    return bool(regex.fullmatch("[a-f0-9]{32}", id or ""))
+
+
+# Every table a backup carries; backup and restore must agree exactly.
+BACKUP_TABLES = (
+    "folders",
+    "feeds",
+    "articles",
+    "rules",
+    "settings",
+    "events",
+    "tombstones",
+    "chrome_state",
+    "jobs",
+    "undo",
+)
 
 
 def record(row):
@@ -162,6 +188,18 @@ def retry_at(exc, attempts):
             pass
     # A publisher's Retry-After is honoured up to a day; beyond that it parks a feed for good.
     return datetime.now(timezone.utc) + timedelta(seconds=min(delay, 86400))
+
+
+def configure_session(session, options):
+    """Feedelio's identity and safety rails on a requests session: no ambient
+    proxies or credentials, pinned hosts, one User-Agent for the whole app."""
+    session.trust_env = False
+    for scheme in ("http://", "https://"):
+        session.mount(scheme, GuardAdapter(options.get("cookie_origin")))
+    session.headers.update(request_headers(options))
+    if options.get("proxy"):
+        session.proxies = dict(http=options["proxy"], https=options["proxy"])
+    return session
 
 
 class GuardAdapter(PinnedAdapter):
@@ -244,16 +282,9 @@ class Core:
             @reader._parser.lazy_init
             def configure(parser):
                 http = parser.get_retriever("http://")
-                http.session.trust_env = False
                 for mime, parsers in parser.parsers_by_mime_type.items():
                     parser.parsers_by_mime_type[mime] = [(q, BoundedParser(p, durations)) for q, p in parsers]
-                http.session.mount("http://", GuardAdapter(options.get("cookie_origin")))
-                http.session.mount("https://", GuardAdapter(options.get("cookie_origin")))
-                http.session.headers["User-Agent"] = options.get("user_agent") or "Feedelio/0.1"
-                if options.get("cookie"):
-                    http.session.headers["Cookie"] = options["cookie"]
-                if options.get("proxy"):
-                    http.session.proxies = dict(http=options["proxy"], https=options["proxy"])
+                configure_session(http.session, options)
 
                 def response_hook(session, response, request, **kwargs):
                     if (
@@ -390,10 +421,7 @@ class Core:
             self.db.execute("UPDATE feeds SET folder_id=? WHERE folder_id=?", ("inbox", id))
             self.db.execute("UPDATE folders SET parent_id=? WHERE parent_id=?", (folder["parent_id"], id))
             self.db.execute("DELETE FROM folders WHERE id=?", (id,))
-            collapsed = [c for c in self.settings()["collapsed_folders"] if c != id]
-            self.db.execute(
-                "INSERT OR REPLACE INTO settings VALUES('collapsed_folders',?)", (json.dumps(collapsed),)
-            )
+            self._setting("collapsed_folders", [c for c in self.settings()["collapsed_folders"] if c != id])
         return {"ok": True}
 
     def feeds(self):
@@ -401,18 +429,20 @@ class Core:
           count(CASE WHEN a.deleted=0 THEN 1 END) total,
           count(CASE WHEN a.deleted=0 AND (EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value IN ('paywall','archive-preview'))) THEN 1 END) partial_items FROM feeds f
           LEFT JOIN articles a ON a.feed_id=f.id WHERE f.deleted=0 GROUP BY f.id ORDER BY f.title COLLATE NOCASE""")
-        stale = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        # One classification for the whole app: the library filter, the sidebar
+        # dot and the feed list all read this instead of judging a feed again.
+        stale = now(days=-STALE_DAYS)
         for f in feeds:
             f["health"] = (
                 "error"
                 if f["error"]
-                else (
-                    "quiet"
-                    if (f["last_article"] or f["created"]) < stale
-                    else "healthy"
-                    if f["checked"]
-                    else "pending"
-                )
+                else "stale"
+                if (f["last_article"] or f["created"]) < stale
+                else "partial"
+                if f["partial_items"]
+                else "healthy"
+                if f["checked"]
+                else "pending"
             )
             f["favicon"] = (
                 urljoin(f["site_url"] or f["url"], "/favicon.ico") if f["url"].startswith("http") else None
@@ -425,10 +455,10 @@ class Core:
         for f in folders:
             scope = self.descendants(f["id"])
             f["unread"] = sum(feed["unread"] for feed in feeds if feed["folder_id"] in scope)
-        counts = self.one("""SELECT count(*) total,coalesce(sum(a.read=0),0) unread,
+        counts = self.one(f"""SELECT count(*) total,coalesce(sum(a.read=0),0) unread,
           coalesce(sum(a.starred=1),0) starred,
           coalesce(sum(a.read=0 AND json_extract(f.options,'$.bookmarked')=1),0) bookmarks
-          FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE a.deleted=0 AND f.deleted=0""")
+          {ARTICLES} WHERE a.deleted=0 AND f.deleted=0""")
         return dict(
             feeds=feeds,
             folders=folders,
@@ -445,7 +475,7 @@ class Core:
     def queue(self):
         """The worker's backlog by kind: what is waiting, what ran in the last day, and
         how many older articles the archives have brought in so far."""
-        day = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        day = now(days=-1)
         rows = self.rows(
             """SELECT kind,
               coalesce(sum(status IN ('queued','running')),0) waiting,
@@ -460,7 +490,7 @@ class Core:
     def discover(self, url):
         url = safe_url(url)
         data, final, headers = fetch(url)
-        if urlsplit(final).hostname in ("youtube.com", "www.youtube.com"):
+        if is_youtube(final):
             soup = BeautifulSoup(data, "html.parser")
             channel = soup.select_one('meta[itemprop="channelId"]')
             match = regex.search(r'"channelId"\s*:\s*"(UC[\w-]+)"', data.decode(errors="replace"))
@@ -603,7 +633,7 @@ class Core:
             if reschedule:
                 self.db.execute(
                     "UPDATE feeds SET interval=?,next_check=? WHERE id=?",
-                    (interval, (datetime.now(timezone.utc) + timedelta(minutes=interval)).isoformat(), id),
+                    (interval, now(minutes=interval), id),
                 )
         return {"ok": True}
 
@@ -712,24 +742,20 @@ class Core:
             if view == "history"
             else "a.published " + ("ASC" if sort == "oldest" else "DESC")
         )
-        total = self.one(
-            f"SELECT count(*) n FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where}", args
-        )["n"]
+        counts = self.one(
+            f"SELECT count(*) n, coalesce(sum(a.read=0),0) unread {ARTICLES} WHERE {where}", args
+        )
         items = self.rows(
             f"""SELECT a.id,a.feed_id,a.title,a.url,a.author,a.published,a.read,a.starred,
           a.read_at,a.words,a.tags,a.duplicate,substr(a.text,1,190) excerpt,f.title feed_title,f.folder_id
-          FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where} ORDER BY {order},a.id LIMIT ? OFFSET ?""",
+          {ARTICLES} WHERE {where} ORDER BY {order},a.id LIMIT ? OFFSET ?""",
             [*args, max(1, min(int(limit), 300)), max(0, int(offset))],
         )
-        unread_total = self.one(
-            f"SELECT count(*) n FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where} AND a.read=0",
-            args,
-        )["n"]
-        return {"items": items, "total": total, "unread": unread_total}
+        return {"items": items, "total": counts["n"], "unread": counts["unread"]}
 
     def article(self, id):
         a = self.one(
-            "SELECT a.*,f.title feed_title,f.url feed_url,f.options FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE a.id=?",
+            f"SELECT a.*,f.title feed_title,f.url feed_url,f.options {ARTICLES} WHERE a.id=?",
             (id,),
         )
         a["source_url"] = a["url"]
@@ -800,7 +826,7 @@ class Core:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             articles = self.rows(
-                f"SELECT a.id,a.read,a.read_at FROM articles a JOIN feeds f ON f.id=a.feed_id WHERE {where}",
+                f"SELECT a.id,a.read,a.read_at {ARTICLES} WHERE {where}",
                 args,
             )
             ids = [a["id"] for a in articles]
@@ -895,6 +921,12 @@ class Core:
             self.db.execute("BEGIN IMMEDIATE")
             return self._ingest(*args, **kwargs)
 
+    def ingest_new(self, feed_id, **fields):
+        """Ingest an entry and say whether it was a new article, not an update."""
+        before = self.db.total_changes
+        id = self.ingest(feed_id, **fields)
+        return id, self.db.total_changes > before
+
     def _ingest(
         self,
         feed_id,
@@ -961,26 +993,10 @@ class Core:
                     a["body"] = body
                 a = self.apply_rules(a)
             if a != previous:
-                self.db.execute(
-                    "UPDATE articles SET title=?,author=?,body=?,text=?,words=?,fingerprint=?,tags=?,read=?,starred=?,deleted=?,url=?,published=?,enclosures=?,transcript=?,duration=? WHERE id=?",
-                    (
-                        a["title"],
-                        a["author"],
-                        a["body"],
-                        a["text"],
-                        a["words"],
-                        a["fingerprint"],
-                        json.dumps(a["tags"]),
-                        a["read"],
-                        a["starred"],
-                        a["deleted"],
-                        a["url"],
-                        a["published"],
-                        json.dumps(a["enclosures"]),
-                        a["transcript"],
-                        a["duration"],
-                        a["id"],
-                    ),
+                self._write_article(
+                    a,
+                    "title author body text words fingerprint tags read starred "
+                    "deleted url published enclosures transcript duration".split(),
                 )
             return a["id"]
         a = dict(
@@ -1011,7 +1027,7 @@ class Core:
         if len(title) >= 20:
             recent = self.rows(
                 "SELECT title,feed_id FROM articles WHERE published>? AND deleted=0 ORDER BY published DESC LIMIT 1000",
-                ((datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),),
+                (now(days=-7),),
             )
             a["duplicate"] = int(
                 any(
@@ -1025,6 +1041,13 @@ class Core:
             [json.dumps(v) if k in JSON_FIELDS else v for k, v in a.items()],
         )
         return a["id"]
+
+    def _write_article(self, a, columns):
+        """Store the named columns of an article dict; JSON fields encode themselves."""
+        self.db.execute(
+            "UPDATE articles SET " + ",".join(c + "=?" for c in columns) + " WHERE id=?",
+            [json.dumps(a[c]) if c in JSON_FIELDS else a[c] for c in columns] + [a["id"]],
+        )
 
     def enqueue(self, kind, payload=None):
         if kind not in ("refresh", "extract", "download", "backfill", "purge", "rules"):
@@ -1118,7 +1141,6 @@ class Core:
                     rf = reader.get_feed(f["url"])
                     new = 0
                     for entry in reader.get_entries(feed=f["url"]):
-                        before = self.db.total_changes
                         transcript = ""
                         transcript_links = [
                             e
@@ -1150,28 +1172,10 @@ class Core:
                                     break
                                 except Exception:
                                     continue  # A broken optional transcript must not break the feed.
-                        body = next(
-                            (
-                                c.value if c.type != "text/plain" else text_html(c.value)
-                                for c in entry.content
-                                if c.type in ("text/html", "text/xhtml", "text/plain")
-                            ),
-                            entry.summary or "",
+                        id, added = self.ingest_new(
+                            feed_id, **entry_fields(entry, durations), transcript=transcript, read=read
                         )
-                        id = self.ingest(
-                            feed_id,
-                            entry.id,
-                            entry.title or "",
-                            entry.link or "",
-                            body,
-                            entry.authors_str,
-                            (entry.published or entry.updated or entry.added).isoformat(),
-                            [dataclasses.asdict(e) for e in entry.enclosures],
-                            transcript=transcript,
-                            read=read,
-                            duration=durations.get(entry.id, 0),
-                        )
-                        if self.db.total_changes > before:
+                        if added:
                             new += 1
                             if extract and id:
                                 self.enqueue("extract", {"article_id": id})
@@ -1211,7 +1215,7 @@ class Core:
                     "UPDATE feeds SET checked=?,next_check=?,last_article=?,interval=?,error=NULL,failures=0 WHERE id=?",
                     (
                         now(),
-                        (datetime.now(timezone.utc) + timedelta(minutes=interval)).isoformat(),
+                        now(minutes=interval),
                         dates[0].isoformat() if dates else None,
                         interval,
                         feed_id,
@@ -1225,10 +1229,7 @@ class Core:
                     (
                         now(),
                         str(error)[:1000],
-                        (
-                            datetime.now(timezone.utc)
-                            + timedelta(minutes=min(1440, 15 * 2 ** min(f["failures"], 7)))
-                        ).isoformat(),
+                        now(minutes=min(1440, 15 * 2 ** min(f["failures"], 7))),
                         feed_id,
                     ),
                 )
@@ -1252,17 +1253,16 @@ class Core:
                 link = item
             if link and link.get("href"):
                 article_url = urljoin(url, link["href"])
-                before = self.db.total_changes
-                id = self.ingest(
+                id, added = self.ingest_new(
                     feed["id"],
-                    article_url,
-                    link.get_text(" ", strip=True),
-                    article_url,
-                    str(item),
+                    guid=article_url,
+                    title=link.get_text(" ", strip=True),
+                    url=article_url,
+                    body=str(item),
                     published=scraped_date(item),
                     read=read,
                 )
-                if self.db.total_changes > before:
+                if added:
                     count += 1
                     if extract:
                         self.enqueue("extract", {"article_id": id})
@@ -1292,21 +1292,10 @@ class Core:
                 if result["paywall"]:
                     a["tags"] = sorted(set(a["tags"] + ["paywall"]))
             a = self.apply_rules(a)
-            self.db.execute(
-                "UPDATE articles SET extracted=1,body=?,text=?,url=?,transcript=?,tags=?,words=?,read=?,starred=?,deleted=?,duration=? WHERE id=?",
-                (
-                    a["body"],
-                    a["text"],
-                    a["url"],
-                    a["transcript"],
-                    json.dumps(a["tags"]),
-                    a["words"],
-                    a["read"],
-                    a["starred"],
-                    a["deleted"],
-                    a["duration"],
-                    article_id,
-                ),
+            a["extracted"] = 1
+            self._write_article(
+                a,
+                "extracted body text url transcript tags words read starred deleted duration".split(),
             )
         return {"id": article_id}
 
@@ -1329,11 +1318,10 @@ class Core:
                             continue
                         response.raise_for_status()
                         size = 0
+                        limit = int(os.getenv("FEEDELIO_MAX_EPISODE_MB", "500")) * 1024 * 1024
                         with partial.open("wb") as output:
-                            for chunk in response.iter_bytes():
+                            for chunk in bounded(response.iter_bytes(), limit, "Episode"):
                                 size += len(chunk)
-                                if size > int(os.getenv("FEEDELIO_MAX_EPISODE_MB", "500")) * 1024 * 1024:
-                                    raise ValueError("Episode exceeds download size limit.")
                                 output.write(chunk)
                         partial.replace(path)
                         return {"bytes": size}
@@ -1343,7 +1331,7 @@ class Core:
 
     def download_path(self, id):
         self.one("SELECT id FROM jobs WHERE id=? AND kind='download' AND status='done'", (id,))
-        if not regex.fullmatch("[a-f0-9]{32}", id):
+        if not is_uid(id):
             raise ValueError("Invalid download id.")
         return self.root / "downloads" / id
 
@@ -1358,26 +1346,15 @@ class Core:
     def _archive_fetch(self, url, options, json=None, headers=None):
         """Use reader's HTTP stack, with the same bounds and credential policy."""
         with requests.Session() as session:
-            session.trust_env = False
+            configure_session(session, options)
             session.max_redirects = 10
-            for scheme in ("http://", "https://"):
-                session.mount(scheme, GuardAdapter(options.get("cookie_origin")))
-            session.headers["User-Agent"] = options.get("user_agent") or "Feedelio/0.1"
-            if options.get("cookie"):
-                session.headers["Cookie"] = options["cookie"]
-            if options.get("proxy"):
-                session.proxies = dict(http=options["proxy"], https=options["proxy"])
             method = "GET" if json is None else "POST"
             with session.request(
                 method, url, json=json, headers=headers, stream=True, timeout=(5, 30)
             ) as response:
                 response.raise_for_status()
-                data = bytearray()
-                for chunk in response.iter_content(65536):
-                    data.extend(chunk)
-                    if len(data) > 8_000_000:
-                        raise ValueError("Archive response exceeds the 8 MB size limit.")
-                return bytes(data), response.url, response.headers
+                data = b"".join(bounded(response.iter_content(65536), 8_000_000, "Archive response"))
+                return data, response.url, response.headers
 
     def backfill(self, feed_id, url=None, max_pages=None, *, state=None):
         """One resumable archive step, never an unbounded network loop.
@@ -1501,30 +1478,7 @@ class Core:
             durations = {}
             entries, next_url = archives.feed_page(data, final, headers, durations)
             for e in entries:
-                body = next(
-                    (
-                        text_html(c.value) if c.type == "text/plain" else c.value
-                        for c in e.content
-                        if c.type in ("text/html", "text/xhtml", "text/plain")
-                    ),
-                    e.summary or "",
-                )
-                before = self.one("SELECT count(*) n FROM articles WHERE feed_id=?", (feed_id,))["n"]
-                self.ingest(
-                    feed_id,
-                    e.id,
-                    e.title or "",
-                    e.link or "",
-                    body,
-                    ", ".join(a.name or "" for a in e.authors),
-                    (e.published or e.updated).isoformat() if (e.published or e.updated) else None,
-                    [dataclasses.asdict(x) for x in e.enclosures],
-                    read=read,
-                    duration=durations.get(e.id, 0),
-                )
-                state["articles"] += (
-                    self.one("SELECT count(*) n FROM articles WHERE feed_id=?", (feed_id,))["n"] - before
-                )
+                state["articles"] += self.ingest_new(feed_id, **entry_fields(e, durations), read=read)[1]
         state["visited"] = [*state["visited"], page]
         state["pages"] += 1
         state["next_url"] = next_url
@@ -1594,10 +1548,13 @@ class Core:
         host = archives.host(job["result"], job.get("feed_url"))
         return datetime.now(timezone.utc) + timedelta(seconds=archives.interval(host))
 
+    def _setting(self, key, value):
+        self.db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (key, json.dumps(value)))
+
     def _pace_host(self, job, until):
         hosts = self._archive_hosts()
         hosts[archives.host(job["result"], job.get("feed_url"))] = until
-        self.db.execute("INSERT OR REPLACE INTO settings VALUES('archive_hosts',?)", (json.dumps(hosts),))
+        self._setting("archive_hosts", hosts)
 
     def purge(self):
         count = 0
@@ -1607,7 +1564,7 @@ class Core:
         with self.db:
             self.db.execute(
                 "DELETE FROM undo WHERE created<?",
-                ((datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),),
+                (now(days=-7),),
             )
         return {"purged": count}
 
@@ -1622,7 +1579,7 @@ class Core:
             days = self.settings()["retention_days"] if days is None else days
             if f["options"].get("archive") or not days:
                 return 0
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+            cutoff = now(days=-int(days))
             doomed = self.rows(
                 "SELECT id,guid FROM articles WHERE feed_id=? AND added<? AND starred=0 AND read=1",
                 (f["id"], cutoff),
@@ -1652,9 +1609,7 @@ class Core:
 
     def tick(self):
         with self.db:
-            self.db.execute(
-                "INSERT OR REPLACE INTO settings VALUES('worker_heartbeat',?)", (json.dumps(now()),)
-            )
+            self._setting("worker_heartbeat", now())
         for f in self.rows(
             "SELECT id FROM feeds WHERE deleted=0 AND url LIKE 'http%' AND (next_check IS NULL OR next_check<=?)",
             (now(),),
@@ -1662,7 +1617,7 @@ class Core:
             self.enqueue("refresh", {"feed_id": f["id"]})
         if not self.rows(
             "SELECT id FROM jobs WHERE kind='purge' AND created>?",
-            ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),),
+            (now(days=-1),),
         ):
             self.enqueue("purge")
         with self.db:
@@ -1760,19 +1715,7 @@ class Core:
                 if not current:
                     continue
                 a = self.apply_rules(current[0])
-                self.db.execute(
-                    "UPDATE articles SET body=?,text=?,words=?,tags=?,read=?,starred=?,deleted=? WHERE id=?",
-                    (
-                        a["body"],
-                        a["text"],
-                        a["words"],
-                        json.dumps(a["tags"]),
-                        a["read"],
-                        a["starred"],
-                        a["deleted"],
-                        a["id"],
-                    ),
-                )
+                self._write_article(a, "body text words tags read starred deleted".split())
             count += 1
         return {"processed": count}
 
@@ -1837,7 +1780,7 @@ class Core:
             "format": "feedelio-starred",
             "version": 1,
             "articles": self.rows(
-                """SELECT a.*,f.title feed_title FROM articles a JOIN feeds f ON f.id=a.feed_id
+                f"""SELECT a.*,f.title feed_title {ARTICLES}
                WHERE a.starred=1 AND a.deleted=0 AND f.deleted=0 ORDER BY a.published DESC"""
             ),
         }
@@ -1870,21 +1813,9 @@ class Core:
         return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
     def backup(self):
-        tables = [
-            "folders",
-            "feeds",
-            "articles",
-            "rules",
-            "settings",
-            "events",
-            "tombstones",
-            "chrome_state",
-            "jobs",
-            "undo",
-        ]
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            data = {t: [dict(r) for r in self.db.execute(f"SELECT * FROM {t}")] for t in tables}
+            data = {t: [dict(r) for r in self.db.execute(f"SELECT * FROM {t}")] for t in BACKUP_TABLES}
             media = {}
             for j in data["jobs"]:
                 if j["kind"] == "download" and j["status"] == "done":
@@ -1899,20 +1830,8 @@ class Core:
     def restore(self, backup):
         if backup.get("format") != "feedelio" or backup.get("version") != 1:
             raise ValueError("Unsupported backup format.")
-        tables = [
-            "folders",
-            "feeds",
-            "articles",
-            "rules",
-            "settings",
-            "events",
-            "tombstones",
-            "chrome_state",
-            "jobs",
-            "undo",
-        ]
         data = backup.get("tables", {})
-        if set(data) != set(tables):
+        if set(data) != set(BACKUP_TABLES):
             raise ValueError("Backup is missing required tables.")
         # Validate tree and media before entering the restore transaction.
         folders = {f["id"]: f["parent_id"] for f in data["folders"]}
@@ -1925,7 +1844,7 @@ class Core:
                 id = folders[id]
         media = backup.get("media", {})
         expected_media = {j["id"] for j in data["jobs"] if j["kind"] == "download" and j["status"] == "done"}
-        if set(media) != expected_media or any(not regex.fullmatch("[a-f0-9]{32}", id) for id in media):
+        if set(media) != expected_media or any(not is_uid(id) for id in media):
             raise ValueError("Backup has missing or invalid downloaded episodes.")
         decoded = {id: base64.b64decode(value, validate=True) for id, value in media.items()}
         written = []
@@ -1940,7 +1859,7 @@ class Core:
                 if any((self.root / "downloads" / id).exists() for id in decoded):
                     raise ValueError("Restore requires an empty downloads directory.")
                 self.db.execute("PRAGMA defer_foreign_keys=ON")
-                for table in tables:
+                for table in BACKUP_TABLES:
                     valid = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
                     for row in data[table]:
                         if not set(row) <= valid:  # Older backups may lack newer columns.

@@ -1,10 +1,25 @@
 import json
+import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from fastapi.testclient import TestClient
 
+from feedelio.api import app
 from feedelio.core import Core
+
+
+def local_client(**kwargs):
+    """A test client the API accepts as a request from this machine."""
+    return TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000), **kwargs)
+
+
+def assert_write_locked(core, sql, params=()):
+    """Another connection must not be able to write while Core holds the lock."""
+    with sqlite3.connect(core.root / "app.sqlite", timeout=0) as other:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            other.execute(sql, params)
 
 
 @pytest.fixture

@@ -370,6 +370,161 @@ export function AppearanceSettings({ settings: s, pref }) {
   );
 }
 
+// Every dropdown in the app: a button that opens a listbox which stays open
+// until an option is picked, Escape, or a click elsewhere. Native <select>
+// popups close on mouseup in some browsers and cannot indent nested folders.
+export function Select({
+  label,
+  name,
+  value,
+  defaultValue = "",
+  options,
+  onChange,
+  placeholder,
+}) {
+  const [inner, setInner] = useState(defaultValue),
+    [open, setOpen] = useState(false),
+    [cursor, setCursor] = useState(0),
+    [place, setPlace] = useState({}),
+    root = useRef(null),
+    list = useRef(null);
+  const current = value === undefined ? inner : value,
+    chosen = options.find((o) => o.value === current);
+  function pick(option) {
+    setOpen(false);
+    if (option.disabled) return;
+    setInner(option.value);
+    onChange?.(option.value);
+  }
+  function show() {
+    const box = root.current.getBoundingClientRect(),
+      below = innerHeight - box.bottom - 12,
+      above = box.top - 12,
+      up = below < 200 && above > below;
+    setPlace({
+      left: box.left,
+      minWidth: box.width,
+      maxWidth: innerWidth - box.left - 12,
+      maxHeight: Math.min(360, up ? above : below),
+      ...(up ? { bottom: innerHeight - box.top + 4 } : { top: box.bottom + 4 }),
+    });
+    setCursor(Math.max(0, options.indexOf(chosen)));
+    setOpen(true);
+  }
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => root.current?.contains(e.target) || setOpen(false),
+      hide = () => setOpen(false);
+    document.addEventListener("pointerdown", away);
+    addEventListener("resize", hide);
+    addEventListener("scroll", hide, true);
+    list.current?.children[cursor]?.scrollIntoView({ block: "nearest" });
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      removeEventListener("resize", hide);
+      removeEventListener("scroll", hide, true);
+    };
+  }, [open]);
+  useEffect(() => {
+    if (open)
+      list.current?.children[cursor]?.scrollIntoView({ block: "nearest" });
+  }, [cursor]);
+  function key(e) {
+    const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (!open) {
+      if (step || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        show();
+      }
+      return;
+    }
+    e.stopPropagation();
+    if (step) {
+      e.preventDefault();
+      setCursor((c) => Math.min(options.length - 1, Math.max(0, c + step)));
+    } else if (e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      setCursor(e.key === "Home" ? 0 : options.length - 1);
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      pick(options[cursor]);
+    } else if (e.key === "Escape" || e.key === "Tab") {
+      if (e.key === "Escape") e.preventDefault();
+      setOpen(false);
+    }
+  }
+  return (
+    <div className="select" ref={root} onKeyDown={key}>
+      {name && <input type="hidden" name={name} value={current} />}
+      <button
+        type="button"
+        role="combobox"
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={chosen ? "" : "placeholder"}
+        onClick={() => (open ? setOpen(false) : show())}
+      >
+        <span>{chosen?.label ?? placeholder ?? ""}</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="m6 9 6 6 6-6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          aria-label={label}
+          className="select-menu"
+          ref={list}
+          style={place}
+        >
+          {options.map((o, i) => (
+            <li
+              key={o.value}
+              role="option"
+              aria-selected={o.value === current}
+              aria-disabled={o.disabled || undefined}
+              className={i === cursor ? "focused" : ""}
+              style={{ paddingLeft: 12 + (o.depth || 0) * 16 }}
+              onPointerMove={() => setCursor(i)}
+              onClick={(e) => {
+                e.preventDefault(); // a wrapping <label> would re-click the button
+                pick(o);
+              }}
+            >
+              {o.label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Folders as dropdown options in sidebar order: depth-first by name, with
+// Unfiled last among the top-level ones; excluded folders take their subtrees.
+export function folderOptions(
+  folders,
+  exclude = new Set(),
+  parent = null,
+  depth = 0,
+) {
+  return folders
+    .filter((f) => f.parent_id === parent && !exclude.has(f.id))
+    .sort((a, b) => (a.id === "inbox") - (b.id === "inbox"))
+    .flatMap((f) => [
+      { value: f.id, label: f.name, depth },
+      ...folderOptions(folders, exclude, f.id, depth + 1),
+    ]);
+}
+
 export function FolderSelect({
   data,
   act,
@@ -401,24 +556,17 @@ export function FolderSelect({
   }
   return (
     <>
-      <select
+      <Select
         name={name}
-        aria-label={label}
+        label={label}
         value={value}
-        onChange={(e) =>
-          e.target.value === "+" ? setCreating(true) : onChange(e.target.value)
-        }
-      >
-        {top && <option value="">Top level</option>}
-        {data.folders
-          .filter((f) => !exclude.has(f.id))
-          .map((f) => (
-            <option key={f.id} value={f.id}>
-              {f.name}
-            </option>
-          ))}
-        <option value="+">+ New folder…</option>
-      </select>
+        options={[
+          ...(top ? [{ value: "", label: "Top level" }] : []),
+          ...folderOptions(data.folders, exclude),
+          { value: "+", label: "+ New folder…" },
+        ]}
+        onChange={(v) => (v === "+" ? setCreating(true) : onChange(v))}
+      />
       {creating && (
         <div className="inline-folder">
           <input
@@ -491,6 +639,7 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
             data={data}
             act={act}
             name="parent"
+            label="Put folder under"
             value={parent}
             onChange={setParent}
             exclude={new Set(["inbox", ...descendants])}
@@ -638,17 +787,12 @@ export function FolderManager({ data, act, onEdit, onNew }) {
                       ⣿
                     </button>
                     {dragged === feed.id && (
-                      <select
-                        aria-label={`Destination for ${feed.title}`}
+                      <Select
+                        label={`Destination for ${feed.title}`}
                         value={feed.folder_id}
-                        onChange={(e) => move(feed.id, e.target.value)}
-                      >
-                        {data.folders.map((x) => (
-                          <option key={x.id} value={x.id}>
-                            {x.name}
-                          </option>
-                        ))}
-                      </select>
+                        options={folderOptions(data.folders)}
+                        onChange={(v) => move(feed.id, v)}
+                      />
                     )}
                   </div>
                 ))}

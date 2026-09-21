@@ -65,6 +65,8 @@ import {
   FolderSheet,
   FolderManager,
   FolderSelect,
+  Select,
+  folderOptions,
   feedClass,
 } from "./redesign.jsx";
 
@@ -1869,6 +1871,7 @@ function Subscribe({ data, act, onClose }) {
             <FolderSelect
               data={data}
               act={act}
+              label="Folder"
               value={folder}
               onChange={setFolder}
             />
@@ -2153,19 +2156,21 @@ function Library({
                         ? `refreshed ${elapsed(lastRefreshed)} ago`
                         : "not refreshed yet"}
                     </span>
-                    <select
-                      aria-label="Filter feeds by status"
+                    <Select
+                      label="Filter feeds by status"
                       value={status}
-                      onChange={(e) => setStatus(e.target.value)}
-                    >
-                      {Object.entries(feedStatuses).map(([id, label]) => (
-                        <option key={id} value={id}>
-                          {label}
-                          {id !== "all" &&
-                            ` (${data.feeds.filter((f) => (feedIssue(f)?.kind || "healthy") === id).length})`}
-                        </option>
-                      ))}
-                    </select>
+                      options={Object.entries(feedStatuses).map(
+                        ([id, label]) => ({
+                          value: id,
+                          label:
+                            label +
+                            (id === "all"
+                              ? ""
+                              : ` (${data.feeds.filter((f) => (feedIssue(f)?.kind || "healthy") === id).length})`),
+                        }),
+                      )}
+                      onChange={setStatus}
+                    />
                     <button className="primary" onClick={onSubscribe}>
                       <Plus size={15} />
                       Add feed
@@ -2174,32 +2179,21 @@ function Library({
                   {ids.length > 0 && (
                     <div className="bulk-bar">
                       <strong>{ids.length} selected</strong>
-                      <select
-                        aria-label="Move selected feeds"
-                        defaultValue=""
-                        onChange={(e) =>
+                      <Select
+                        label="Move selected feeds"
+                        value=""
+                        placeholder="Move to folder…"
+                        options={folderOptions(data.folders)}
+                        onChange={(folder_id) =>
                           submit(() =>
                             act(
                               "bulk_feeds",
-                              {
-                                ids,
-                                action: "move",
-                                folder_id: e.target.value,
-                              },
+                              { ids, action: "move", folder_id },
                               "Feeds moved",
                             ),
                           )
                         }
-                      >
-                        <option value="" disabled>
-                          Move to folder…
-                        </option>
-                        {data.folders.map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                       <button
                         onClick={() =>
                           submit(() =>
@@ -2460,11 +2454,14 @@ function Library({
                 </Field>
                 <div className="form-grid">
                   <Field label="Match field">
-                    <select name="field">
-                      {["title", "body", "url", "author", "tags"].map((x) => (
-                        <option key={x}>{x}</option>
-                      ))}
-                    </select>
+                    <Select
+                      name="field"
+                      label="Match field"
+                      defaultValue="title"
+                      options={["title", "body", "url", "author", "tags"].map(
+                        (x) => ({ value: x, label: x }),
+                      )}
+                    />
                   </Field>
                   <Field label="Pattern (regex)">
                     <input
@@ -2474,25 +2471,31 @@ function Library({
                     />
                   </Field>
                   <Field label="Action">
-                    <select name="action">
-                      {["read", "star", "tag", "drop", "rewrite"].map((x) => (
-                        <option key={x}>{x}</option>
-                      ))}
-                    </select>
+                    <Select
+                      name="action"
+                      label="Action"
+                      defaultValue="read"
+                      options={["read", "star", "tag", "drop", "rewrite"].map(
+                        (x) => ({ value: x, label: x }),
+                      )}
+                    />
                   </Field>
                   <Field label="Tag or replacement">
                     <input name="value" placeholder="Optional" />
                   </Field>
                 </div>
                 <Field label="Scope">
-                  <select name="feed_id">
-                    <option value="">All feeds</option>
-                    {data.feeds.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.title}
-                      </option>
-                    ))}
-                  </select>
+                  <Select
+                    name="feed_id"
+                    label="Scope"
+                    options={[
+                      { value: "", label: "All feeds" },
+                      ...data.feeds.map((f) => ({
+                        value: f.id,
+                        label: f.title,
+                      })),
+                    ]}
+                  />
                 </Field>
                 <div className="form-actions">
                   <button
@@ -2766,6 +2769,7 @@ function FeedEditor({ feed: f, data, act, onBack }) {
             data={data}
             act={act}
             name="folder_id"
+            label="Folder"
             value={folderId}
             onChange={setFolderId}
           />

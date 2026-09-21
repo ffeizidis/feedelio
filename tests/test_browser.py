@@ -159,6 +159,7 @@ def test_desktop_reading_workflow(core, site, web_server):
         # A picker stays open until an option is chosen: the mouse button
         # coming up over it, or a refresh re-rendering the page, does not close it.
         page.mouse.up()
+        page.mouse.wheel(0, 200)
         page.wait_for_timeout(300)
         expect(options.nth(1)).to_be_visible()
         options.nth(1).click()

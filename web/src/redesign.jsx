@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 export const feedClass = (feed) => `feed-hue-${feed?.options?.hue ?? 0}`;
 
@@ -396,7 +396,10 @@ export function Select({
     setInner(option.value);
     onChange?.(option.value);
   }
-  function show() {
+  // Fixed position so the menu escapes dialogs and scroll panes; it is
+  // recomputed while the page moves rather than closing, because a dropdown
+  // must stay open until an option is picked.
+  const locate = useCallback(() => {
     const box = root.current.getBoundingClientRect(),
       below = innerHeight - box.bottom - 12,
       above = box.top - 12,
@@ -405,29 +408,44 @@ export function Select({
       left: box.left,
       minWidth: box.width,
       maxWidth: innerWidth - box.left - 12,
-      maxHeight: Math.min(360, up ? above : below),
+      maxHeight: Math.min(360, Math.max(120, up ? above : below)),
       ...(up ? { bottom: innerHeight - box.top + 4 } : { top: box.bottom + 4 }),
     });
+  }, []);
+  function show() {
+    locate();
     setCursor(Math.max(0, options.indexOf(chosen)));
     setOpen(true);
+  }
+  // Keeping the cursor in view scrolls the menu itself; scrollIntoView would
+  // scroll the pane behind it as well and drag the menu away from its button.
+  function reveal(index) {
+    const menu = list.current,
+      item = menu?.children[index];
+    if (!item) return;
+    if (item.offsetTop < menu.scrollTop) menu.scrollTop = item.offsetTop;
+    else if (
+      item.offsetTop + item.offsetHeight >
+      menu.scrollTop + menu.clientHeight
+    )
+      menu.scrollTop = item.offsetTop + item.offsetHeight - menu.clientHeight;
   }
   useEffect(() => {
     if (!open) return;
     const away = (e) => root.current?.contains(e.target) || setOpen(false),
-      hide = () => setOpen(false);
+      move = (e) => (list.current?.contains(e.target) ? null : locate());
     document.addEventListener("pointerdown", away);
-    addEventListener("resize", hide);
-    addEventListener("scroll", hide, true);
-    list.current?.children[cursor]?.scrollIntoView({ block: "nearest" });
+    addEventListener("resize", locate);
+    addEventListener("scroll", move, true);
+    reveal(cursor);
     return () => {
       document.removeEventListener("pointerdown", away);
-      removeEventListener("resize", hide);
-      removeEventListener("scroll", hide, true);
+      removeEventListener("resize", locate);
+      removeEventListener("scroll", move, true);
     };
   }, [open]);
   useEffect(() => {
-    if (open)
-      list.current?.children[cursor]?.scrollIntoView({ block: "nearest" });
+    if (open) reveal(cursor);
   }, [cursor]);
   function key(e) {
     const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];

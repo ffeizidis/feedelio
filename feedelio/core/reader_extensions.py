@@ -4,12 +4,13 @@ Keep this adapter covered when upgrading reader: its documented plugin interface
 are internal. Feedparser still does all RSS/Atom parsing and normalization.
 """
 
+import dataclasses
 import io
 from xml.sax import SAXParseException
 
 from reader._parser.feedparser import FeedparserParser, _process_feed, feedparser
 
-from .content import fingerprint
+from .content import fingerprint, text_html
 
 
 def duration_seconds(value):
@@ -22,6 +23,30 @@ def duration_seconds(value):
     except ValueError:
         return 0
     return int(seconds) if seconds > 0 else 0
+
+
+def entry_fields(entry, durations=None):
+    """One reader entry as ingest() keywords, so live feeds and archive pages
+    read the same fields the same way."""
+    body = next(
+        (
+            text_html(c.value) if c.type == "text/plain" else c.value
+            for c in entry.content
+            if c.type in ("text/html", "text/xhtml", "text/plain")
+        ),
+        entry.summary or "",
+    )
+    published = entry.published or entry.updated or getattr(entry, "added", None)
+    return dict(
+        guid=entry.id,
+        title=entry.title or "",
+        url=entry.link or "",
+        body=body,
+        author=", ".join(a.name or "" for a in entry.authors),
+        published=published.isoformat() if published else None,
+        enclosures=[dataclasses.asdict(e) for e in entry.enclosures],
+        duration=(durations or {}).get(entry.id, 0),
+    )
 
 
 class ExtendedFeedparser(FeedparserParser):

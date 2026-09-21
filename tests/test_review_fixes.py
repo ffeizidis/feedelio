@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from conftest import assert_write_locked, local_client
 from fastapi.testclient import TestClient
 
 from feedelio.api import app
@@ -77,9 +78,7 @@ def test_state_sensitive_selection_holds_write_lock(core, site, monkeypatch, ope
 
     def check(sql, params=()):
         if "SELECT * FROM articles" in sql or "SELECT id,guid FROM articles" in sql:
-            with sqlite3.connect(core.root / "app.sqlite", timeout=0) as other:
-                with pytest.raises(sqlite3.OperationalError, match="locked"):
-                    other.execute("UPDATE articles SET starred=1 WHERE id=?", (article,))
+            assert_write_locked(core, "UPDATE articles SET starred=1 WHERE id=?", (article,))
             checked.append(True)
         return rows(sql, params)
 
@@ -157,7 +156,7 @@ def test_forged_local_host_cannot_authorize_remote_peer(core, monkeypatch):
         assert remote.get("/api/overview").status_code == 403
         assert remote.post("/api/actions/mark_all", json={"payload": {}}).status_code == 403
         assert remote.get("/api/overview", headers={"X-Forwarded-For": "127.0.0.1"}).status_code == 403
-    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 40000)) as local:
+    with local_client() as local:
         assert local.get("/api/overview").status_code == 200
 
 
@@ -238,9 +237,7 @@ def test_restore_checks_empty_library_under_write_lock(core, site, monkeypatch):
 
     def check(sql, params=()):
         if sql.startswith("SELECT id FROM feeds WHERE id!='chrome'"):
-            with sqlite3.connect(core.root / "app.sqlite", timeout=0) as other:
-                with pytest.raises(sqlite3.OperationalError, match="locked"):
-                    other.execute("INSERT INTO settings VALUES('concurrent','1')")
+            assert_write_locked(core, "INSERT INTO settings VALUES('concurrent','1')")
             checked.append(True)
         return rows(sql, params)
 
@@ -293,9 +290,7 @@ def test_media_export_and_deletion_hold_same_write_lock(core, site, monkeypatch,
     checked = []
 
     def check(id):
-        with sqlite3.connect(core.root / "app.sqlite", timeout=0) as other:
-            with pytest.raises(sqlite3.OperationalError, match="locked"):
-                other.execute("UPDATE jobs SET status='removed' WHERE id=?", (id,))
+        assert_write_locked(core, "UPDATE jobs SET status='removed' WHERE id=?", (id,))
         checked.append(True)
         return original(id)
 

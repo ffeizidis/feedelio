@@ -172,24 +172,21 @@ def statistics():
         return core.statistics()
 
 
+def attachment(filename):
+    return {"Content-Disposition": f'attachment; filename="{filename}"'}
+
+
 @app.get("/api/export/{format}")
 def export(format: str):
     with Core() as core:
         if format == "opml":
             return Response(
-                core.export_opml(),
-                media_type="application/xml",
-                headers={"Content-Disposition": 'attachment; filename="feedelio.opml"'},
+                core.export_opml(), media_type="application/xml", headers=attachment("feedelio.opml")
             )
         if format == "json":
-            return JSONResponse(
-                core.backup(), headers={"Content-Disposition": 'attachment; filename="feedelio.json"'}
-            )
+            return JSONResponse(core.backup(), headers=attachment("feedelio.json"))
         if format == "starred":
-            return JSONResponse(
-                core.export_starred(),
-                headers={"Content-Disposition": 'attachment; filename="feedelio-starred.json"'},
-            )
+            return JSONResponse(core.export_starred(), headers=attachment("feedelio-starred.json"))
         raise HTTPException(404)
 
 
@@ -199,7 +196,7 @@ def obsidian(id: str):
         return Response(
             core.obsidian(id),
             media_type="text/markdown",
-            headers={"Content-Disposition": f'attachment; filename="feedelio-{id}.md"'},
+            headers=attachment(f"feedelio-{id}.md"),
         )
 
 

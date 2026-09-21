@@ -67,6 +67,7 @@ import {
   FolderSelect,
   Select,
   folderOptions,
+  useSubmit,
   feedClass,
 } from "./redesign.jsx";
 
@@ -145,6 +146,25 @@ async function api(path, body) {
   return data;
 }
 const cmd = (name, payload = {}) => api("actions/" + name, { payload });
+// A publisher's page always opens disowned, in its own tab.
+const openExternal = (url) => window.open(url, "_blank", "noopener,noreferrer");
+// Queue an update: one feed when given, the whole library otherwise.
+const refreshJob = (feedId) => [
+  "enqueue",
+  { kind: "refresh", payload: feedId ? { feed_id: feedId, manual: true } : {} },
+  "Update queued",
+];
+const extractJob = (articleId) => [
+  "enqueue",
+  { kind: "extract", payload: { article_id: articleId } },
+  "Full article extraction queued",
+];
+// A comma-separated field as a list of tags.
+const parseTags = (text) =>
+  (text || "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
 // Age in the list: now, 1m, 10m, 2h, 3d, 3w, 7mn, 2y.
 const ago = (value) => {
   const minutes = Math.max(0, (Date.now() - new Date(value).getTime()) / 60000);
@@ -198,36 +218,24 @@ function fileSize(bytes) {
   for (; bytes >= 1024 && i < units.length - 1; i++) bytes /= 1024;
   return `${bytes < 10 && i ? bytes.toFixed(1) : Math.round(bytes)} ${units[i]}`;
 }
-function elapsed(value) {
-  if (!value) return "never";
-  const minutes = Math.max(0, (Date.now() - new Date(value).getTime()) / 60000);
-  return minutes < 1
-    ? "just now"
-    : minutes < 60
-      ? `${Math.floor(minutes)}m`
-      : minutes < 1440
-        ? `${Math.floor(minutes / 60)}h`
-        : minutes < 10080
-          ? `${Math.floor(minutes / 1440)}d`
-          : `${Math.floor(minutes / 10080)}w`;
-}
+// The same ages, for a feed that may never have been checked.
+const elapsed = (value) => (value ? ago(value) : "never");
+// What the server says about a feed, in the words the library uses. The
+// classification itself lives in Core.feeds(): one verdict, one threshold.
 function feedIssue(f) {
-  if (f.error)
+  if (f.health === "error")
     return {
       kind: "error",
       label: `failed ${elapsed(f.checked)}`,
       note: `${f.failures} failed fetches: ${f.error}`,
     };
-  if (
-    Date.now() - new Date(f.last_article || f.created).getTime() >=
-    14 * 86400000
-  )
+  if (f.health === "stale")
     return {
       kind: "stale",
       label: `stale ${elapsed(f.last_article || f.created)}`,
-      note: "No new items in 14 days or more",
+      note: "No new items in two weeks or more",
     };
-  if (f.partial_items)
+  if (f.health === "partial")
     return {
       kind: "partial",
       label: "partial",
@@ -235,9 +243,23 @@ function feedIssue(f) {
     };
   return null;
 }
+// What a stream of articles is called, in the heading and in the tab.
+const VIEW_TITLES = {
+  all: "All articles",
+  starred: "Saved for later",
+  bookmarks: "Bookmarked feeds",
+  history: "Recently read",
+};
+const streamTitle = (data, view, scope, q) =>
+  q
+    ? "Search results"
+    : data?.feeds.find((f) => f.id === scope.feed_id)?.title ||
+      data?.folders.find((f) => f.id === scope.folder_id)?.name ||
+      VIEW_TITLES[view];
 const feedStatuses = {
   all: "All feeds",
   healthy: "Healthy",
+  pending: "Not checked yet",
   error: "Failing",
   stale: "Stale",
   partial: "Partial",
@@ -259,6 +281,66 @@ function ArticleMarks({ item }) {
       {video && !short && <Video size={12} aria-label="Video" />}
       {paywall && <Lock size={12} aria-label="Paywalled" />}
     </span>
+  );
+}
+// The read dot and the star, in the list and in the reader.
+function ReadStar({ item, run, labels }) {
+  return (
+    <>
+      <button
+        className="read-toggle"
+        aria-label={item.read ? labels.unread : labels.read}
+        onClick={() =>
+          run("change_articles", { ids: [item.id], read: !item.read })
+        }
+      >
+        <span className={"read-circle " + (item.read ? "is-read" : "")} />
+      </button>
+      <button
+        className={"star-toggle " + (item.starred ? "starred" : "")}
+        aria-label={item.starred ? labels.unstar : labels.star}
+        aria-pressed={!!item.starred}
+        onClick={() =>
+          run("change_articles", { ids: [item.id], starred: !item.starred })
+        }
+      >
+        ★
+      </button>
+    </>
+  );
+}
+// A stream heading that opens the settings of what it names.
+function HeadingLink({ title, label, onClick, children }) {
+  return (
+    <h1>
+      <button
+        className="heading-link"
+        title={title}
+        aria-label={label}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+    </h1>
+  );
+}
+// A failed job can always be put back in the queue as it was.
+function RetryJob({ job, act, submit }) {
+  if (job.status !== "failed") return null;
+  return (
+    <button
+      onClick={() =>
+        submit(() =>
+          act(
+            "enqueue",
+            { kind: job.kind, payload: job.payload },
+            "Job queued again",
+          ),
+        )
+      }
+    >
+      Retry
+    </button>
   );
 }
 function IconButton({ icon: Icon, label, ...props }) {
@@ -283,16 +365,7 @@ function UpdateNow({ data, act, feedId, checked }) {
       className="update-now"
       disabled={pending}
       title={checked ? "Last checked " + ago(checked) + " ago" : undefined}
-      onClick={() =>
-        act(
-          "enqueue",
-          {
-            kind: "refresh",
-            payload: feedId ? { feed_id: feedId, manual: true } : {},
-          },
-          "Update queued",
-        )
-      }
+      onClick={() => act(...refreshJob(feedId))}
     >
       <RefreshCw size={13} className={pending ? "spin" : ""} />
       {pending ? "Updating…" : "Update now"}
@@ -338,6 +411,31 @@ function Modal({ title, subtitle, onClose, children, wide = false }) {
   );
 }
 
+// One sentence about an archive walk, wherever it is shown.
+function archiveSummary(job) {
+  const status = {
+    queued: "in progress",
+    running: "in progress",
+    paused: "paused",
+    failed: "failed",
+    done: "complete",
+  }[job.status];
+  const parts = [
+    `Archive ${status || job.status}`,
+    `${job.result?.pages || 0} pages`,
+    `${job.result?.articles || 0} older articles`,
+  ];
+  if (job.result?.previews)
+    parts.push(`${job.result.previews} available as preview only`);
+  if (job.status === "queued")
+    parts.push(
+      job.result?.not_before
+        ? "next page after " +
+            new Date(job.result.not_before).toLocaleTimeString()
+        : "one page per minute",
+    );
+  return parts.join(" · ");
+}
 function BackfillStatus({ jobs, feeds, scope, act }) {
   const latest = [
     ...new Map([...jobs].reverse().map((j) => [j.payload.feed_id, j])).values(),
@@ -355,22 +453,7 @@ function BackfillStatus({ jobs, feeds, scope, act }) {
           <strong>
             {feeds.find((f) => f.id === j.payload.feed_id)?.title}:{" "}
           </strong>
-          Archive {j.status === "queued" ? "waiting" : j.status} ·{" "}
-          {j.result?.pages || 0} pages · {j.result?.articles || 0} older
-          articles added
-          {!!j.result?.previews && (
-            <span> · {j.result.previews} available as preview only</span>
-          )}
-          {j.status === "queued" && (
-            <span>
-              {" "}
-              ·{" "}
-              {j.result?.not_before
-                ? "next request after " +
-                  new Date(j.result.not_before).toLocaleTimeString()
-                : "one request per minute"}
-            </span>
-          )}
+          {archiveSummary(j)}
           {["queued", "running", "paused", "failed"].includes(j.status) && (
             <button
               type="button"
@@ -520,16 +603,7 @@ function App() {
       ? article.data.title
       : modal
         ? "Manage library"
-        : q
-          ? "Search results"
-          : data?.feeds.find((f) => f.id === scope.feed_id)?.title ||
-            data?.folders.find((f) => f.id === scope.folder_id)?.name ||
-            {
-              all: "All articles",
-              starred: "Saved for later",
-              bookmarks: "Bookmarked feeds",
-              history: "Recently read",
-            }[view];
+        : streamTitle(data, view, scope, q);
   useEffect(() => {
     if (data) document.title = "feedelio - " + tabTitle;
   }, [tabTitle, data]);
@@ -620,8 +694,7 @@ function App() {
     setSearchOpen(false);
   }
   function openTitle(item) {
-    if (settings.open_titles_in === "original")
-      window.open(item.url, "_blank", "noopener,noreferrer");
+    if (settings.open_titles_in === "original") openExternal(item.url);
     else open(item);
   }
   function markAll() {
@@ -743,8 +816,7 @@ function App() {
       else if (e.key === "z") run("undo", {}, "Last change undone");
       else if (e.key === "Enter" && target) {
         e.preventDefault();
-        if (e.shiftKey)
-          window.open(target.url, "_blank", "noopener,noreferrer");
+        if (e.shiftKey) openExternal(target.url);
         else open(target);
       } else if (e.key === "A") {
         e.preventDefault();
@@ -774,19 +846,8 @@ function App() {
             )
           ];
         if (feed) stream("all", { feed_id: feed.id });
-      } else if (e.key === "o" && a)
-        window.open(a.url, "_blank", "noopener,noreferrer");
-      else if (e.key === "r")
-        run(
-          "enqueue",
-          {
-            kind: "refresh",
-            payload: scope.feed_id
-              ? { feed_id: scope.feed_id, manual: true }
-              : {},
-          },
-          "Update queued",
-        );
+      } else if (e.key === "o" && a) openExternal(a.url);
+      else if (e.key === "r") run(...refreshJob(scope.feed_id));
       else if (e.key === "a") setModal("subscribe");
       else if (e.key === "?") setModal("keys");
       else if (e.key === " ") {
@@ -855,16 +916,11 @@ function App() {
 
   const activeFolder = data.folders.find((f) => f.id === scope.folder_id),
     activeFeed = data.feeds.find((f) => f.id === scope.feed_id);
-  const heading = q
-    ? "Search results"
-    : activeFeed?.title ||
-      activeFolder?.name ||
-      {
-        all: "All articles",
-        starred: "Saved for later",
-        bookmarks: "Bookmarked feeds",
-        history: "Recently read",
-      }[view];
+  const heading = streamTitle(data, view, scope, q);
+  const openFeedSettings = (id) => {
+    setManageFeed(id);
+    setModal("feeds");
+  };
   const count = articles.data?.total || 0;
   const archive =
     activeFeed &&
@@ -1101,33 +1157,24 @@ function App() {
               </button>
             </div>
           ) : activeFeed ? (
-            <h1>
-              <button
-                className="heading-link"
-                title="Feed settings"
-                aria-label={"Manage feed: " + activeFeed.title}
-                onClick={() => {
-                  setManageFeed(activeFeed.id);
-                  setModal("feeds");
-                }}
-              >
-                {heading}
-              </button>
-            </h1>
+            <HeadingLink
+              title="Feed settings"
+              label={"Manage feed: " + activeFeed.title}
+              onClick={() => openFeedSettings(activeFeed.id)}
+            >
+              {heading}
+            </HeadingLink>
           ) : scope.folder_id && !searchOpen ? (
-            <h1>
-              <button
-                className="heading-link"
-                title="Folder settings"
-                aria-label={"Manage folder: " + heading}
-                onClick={() => {
-                  setManageFolder(scope.folder_id);
-                  setModal("folders");
-                }}
-              >
-                {heading}
-              </button>
-            </h1>
+            <HeadingLink
+              title="Folder settings"
+              label={"Manage folder: " + heading}
+              onClick={() => {
+                setManageFolder(scope.folder_id);
+                setModal("folders");
+              }}
+            >
+              {heading}
+            </HeadingLink>
           ) : (
             <h1>{heading}</h1>
           )}
@@ -1188,33 +1235,12 @@ function App() {
             <button
               className="archive-progress"
               aria-label="Archive progress"
-              onClick={() => {
-                setManageFeed(activeFeed.id);
-                setModal("feeds");
-              }}
+              onClick={() => openFeedSettings(activeFeed.id)}
             >
               {archive.status === "running" && (
                 <Loader2 size={13} className="spin" />
               )}
-              Archive{" "}
-              {
-                {
-                  queued: "in progress",
-                  running: "in progress",
-                  paused: "paused",
-                  failed: "failed",
-                  done: "complete",
-                }[archive.status]
-              }{" "}
-              · {archive.result?.pages || 0} pages ·{" "}
-              {archive.result?.articles || 0} older articles
-              {archive.status === "queued" && archive.result?.not_before && (
-                <>
-                  {" "}
-                  · next page after{" "}
-                  {new Date(archive.result.not_before).toLocaleTimeString()}
-                </>
-              )}
+              {archiveSummary(archive)}
             </button>
           )}
           {searchOpen && (
@@ -1299,37 +1325,16 @@ function App() {
                 onClick={() => setFocused(item.id)}
               >
                 <div className="row-state">
-                  <button
-                    className="read-toggle"
-                    aria-label={
-                      (item.read ? "Mark unread: " : "Mark read: ") + item.title
-                    }
-                    onClick={() =>
-                      run("change_articles", {
-                        ids: [item.id],
-                        read: !item.read,
-                      })
-                    }
-                  >
-                    <span
-                      className={"read-circle " + (item.read ? "is-read" : "")}
-                    />
-                  </button>
-                  <button
-                    className={"star-toggle " + (item.starred ? "starred" : "")}
-                    aria-label={
-                      (item.starred ? "Unstar: " : "Star: ") + item.title
-                    }
-                    aria-pressed={!!item.starred}
-                    onClick={() =>
-                      run("change_articles", {
-                        ids: [item.id],
-                        starred: !item.starred,
-                      })
-                    }
-                  >
-                    ★
-                  </button>
+                  <ReadStar
+                    item={item}
+                    run={run}
+                    labels={{
+                      read: "Mark read: " + item.title,
+                      unread: "Mark unread: " + item.title,
+                      star: "Star: " + item.title,
+                      unstar: "Unstar: " + item.title,
+                    }}
+                  />
                 </div>
                 {!scope.feed_id && (
                   <button
@@ -1464,36 +1469,16 @@ function App() {
                   </details>
                   <div className="reader-meta">
                     <span className="reader-meta-actions">
-                      <button
-                        className="read-toggle"
-                        aria-label={
-                          a.read ? "Mark article unread" : "Mark article read"
-                        }
-                        onClick={() =>
-                          run("change_articles", { ids: [a.id], read: !a.read })
-                        }
-                      >
-                        <span
-                          className={"read-circle " + (a.read ? "is-read" : "")}
-                        />
-                      </button>
-                      <button
-                        className={
-                          "star-toggle " + (a.starred ? "starred" : "")
-                        }
-                        aria-label={
-                          a.starred ? "Unsave article" : "Save for later"
-                        }
-                        aria-pressed={!!a.starred}
-                        onClick={() =>
-                          run("change_articles", {
-                            ids: [a.id],
-                            starred: !a.starred,
-                          })
-                        }
-                      >
-                        ★
-                      </button>
+                      <ReadStar
+                        item={a}
+                        run={run}
+                        labels={{
+                          read: "Mark article read",
+                          unread: "Mark article unread",
+                          star: "Save for later",
+                          unstar: "Unsave article",
+                        }}
+                      />
                     </span>
                   </div>
                   <hr className="reader-rule" />
@@ -1510,44 +1495,39 @@ function App() {
                   )}
                   {a.enclosures
                     .filter((e) => (e.type || "").startsWith("audio/"))
-                    .map((e) => (
-                      <div className="podcast" key={e.href}>
-                        <div>
-                          <Headphones size={20} />
-                          <strong>Listen to this episode</strong>
-                          <button
-                            onClick={() =>
-                              run(
-                                "enqueue",
-                                {
-                                  kind: "download",
-                                  payload: { article_id: a.id, url: e.href },
-                                },
-                                "Episode added to download queue",
-                              )
-                            }
-                          >
-                            <Download size={15} />
-                            Download
-                          </button>
+                    .map((e) => {
+                      const saved = a.downloads.find(
+                        (d) => d.status === "done" && d.url === e.href,
+                      );
+                      return (
+                        <div className="podcast" key={e.href}>
+                          <div>
+                            <Headphones size={20} />
+                            <strong>Listen to this episode</strong>
+                            <button
+                              onClick={() =>
+                                run(
+                                  "enqueue",
+                                  {
+                                    kind: "download",
+                                    payload: { article_id: a.id, url: e.href },
+                                  },
+                                  "Episode added to download queue",
+                                )
+                              }
+                            >
+                              <Download size={15} />
+                              Download
+                            </button>
+                          </div>
+                          <audio
+                            controls
+                            preload="none"
+                            src={saved ? "/api/downloads/" + saved.id : e.href}
+                          />
                         </div>
-                        <audio
-                          controls
-                          preload="none"
-                          src={
-                            a.downloads.find(
-                              (d) => d.status === "done" && d.url === e.href,
-                            )
-                              ? "/api/downloads/" +
-                                a.downloads.find(
-                                  (d) =>
-                                    d.status === "done" && d.url === e.href,
-                                ).id
-                              : e.href
-                          }
-                        />
-                      </div>
-                    ))}
+                      );
+                    })}
                   {!settings.images &&
                     !loadImages &&
                     a.body.includes("<img") && (
@@ -1570,13 +1550,7 @@ function App() {
                       <p>This feed provided a link without article text.</p>
                       <button
                         className="primary"
-                        onClick={() =>
-                          run(
-                            "enqueue",
-                            { kind: "extract", payload: { article_id: a.id } },
-                            "Full article extraction queued",
-                          )
-                        }
+                        onClick={() => run(...extractJob(a.id))}
                       >
                         Fetch full article <ArrowUpRight size={15} />
                       </button>
@@ -1600,15 +1574,7 @@ function App() {
                     </button>
                   </div>
                   <div className="secondary-tools">
-                    <button
-                      onClick={() =>
-                        run(
-                          "enqueue",
-                          { kind: "extract", payload: { article_id: a.id } },
-                          "Full article extraction queued",
-                        )
-                      }
-                    >
+                    <button onClick={() => run(...extractJob(a.id))}>
                       <FileText size={14} />
                       Fetch full text
                     </button>
@@ -1713,11 +1679,7 @@ function App() {
                 "change_articles",
                 {
                   ids: [a.id],
-                  tags: new FormData(e.currentTarget)
-                    .get("tags")
-                    .split(",")
-                    .map((s) => s.trim())
-                    .filter(Boolean),
+                  tags: parseTags(new FormData(e.currentTarget).get("tags")),
                 },
                 "Tags saved",
               );
@@ -1795,8 +1757,7 @@ function Subscribe({ data, act, onClose }) {
       new URLSearchParams(location.search).get("subscribe") || "",
     ),
     [links, setLinks] = useState([]),
-    [loading, setLoading] = useState(false),
-    [error, setError] = useState(""),
+    { error, busy: loading, submit } = useSubmit(),
     [advanced, setAdvanced] = useState(false);
   const [folder, setFolder] = useState("inbox"),
     [title, setTitle] = useState(""),
@@ -1804,23 +1765,14 @@ function Subscribe({ data, act, onClose }) {
     [bridge, setBridge] = useState("");
   async function find(e) {
     e.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      const result = await cmd("discover", { url });
-      setLinks(result);
-      setChosen(result[0]?.url || "");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    const result = await submit(() => cmd("discover", { url }));
+    if (!Array.isArray(result)) return;
+    setLinks(result);
+    setChosen(result[0]?.url || "");
   }
   async function add(feedUrl) {
-    setLoading(true);
-    setError("");
-    try {
-      await act(
+    const done = await submit(() =>
+      act(
         "subscribe",
         {
           url: feedUrl,
@@ -1829,13 +1781,9 @@ function Subscribe({ data, act, onClose }) {
           options: selector ? { scrape_selector: selector, extract: true } : {},
         },
         "Subscription added. The worker will fetch it shortly.",
-      );
-      onClose();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+      ),
+    );
+    if (done) onClose();
   }
   return (
     <Modal
@@ -2014,7 +1962,7 @@ function Library({
     ),
     [status, setStatus] = useState("all"),
     [fromList, setFromList] = useState(false),
-    [error, setError] = useState("");
+    { error, setError, submit } = useSubmit();
   const [folderSheet, setFolderSheet] = useState(null);
   // A feed opened from the list is a layer, so Back returns to the list; one
   // opened from the stream heading is not, so Back leaves the library.
@@ -2062,14 +2010,6 @@ function Library({
     queryFn: () => api("statistics"),
     enabled: tab === "statistics",
   });
-  async function submit(fn) {
-    setError("");
-    try {
-      await fn();
-    } catch (e) {
-      setError(e.message);
-    }
-  }
   return (
     <dialog
       className="library-screen"
@@ -2152,9 +2092,11 @@ function Library({
                     <span>
                       {data.feeds.length} feeds · {data.folders.length - 1}{" "}
                       folders ·{" "}
-                      {lastRefreshed
-                        ? `refreshed ${elapsed(lastRefreshed)} ago`
-                        : "not refreshed yet"}
+                      {!lastRefreshed
+                        ? "not refreshed yet"
+                        : ago(lastRefreshed) === "now"
+                          ? "refreshed just now"
+                          : `refreshed ${ago(lastRefreshed)} ago`}
                     </span>
                     <Select
                       label="Filter feeds by status"
@@ -2166,7 +2108,7 @@ function Library({
                             label +
                             (id === "all"
                               ? ""
-                              : ` (${data.feeds.filter((f) => (feedIssue(f)?.kind || "healthy") === id).length})`),
+                              : ` (${data.feeds.filter((f) => f.health === id).length})`),
                         }),
                       )}
                       onChange={setStatus}
@@ -2231,11 +2173,9 @@ function Library({
                               {
                                 ids,
                                 action: "tag",
-                                tags: new FormData(e.currentTarget)
-                                  .get("tags")
-                                  .split(",")
-                                  .map((s) => s.trim())
-                                  .filter(Boolean),
+                                tags: parseTags(
+                                  new FormData(e.currentTarget).get("tags"),
+                                ),
                               },
                               "Feed tags updated",
                             ),
@@ -2261,81 +2201,79 @@ function Library({
                       <span />
                     </div>
                     {data.feeds
-                      .filter(
-                        (f) =>
-                          status === "all" ||
-                          (feedIssue(f)?.kind || "healthy") === status,
-                      )
-                      .map((f) => (
-                        <div key={f.id} className={feedClass(f)}>
-                          <div className="feed-cell">
-                            <input
-                              type="checkbox"
-                              aria-label={"Select " + f.title}
-                              checked={ids.includes(f.id)}
-                              onChange={(e) =>
-                                setIds(
-                                  e.target.checked
-                                    ? [...ids, f.id]
-                                    : ids.filter((id) => id !== f.id),
-                                )
-                              }
-                            />
-                            <div className="feed-info">
-                              <i className="hue-dot" />
-                              <span>
-                                <button
-                                  className="feed-open"
-                                  onClick={() => openFeed(f)}
-                                >
-                                  <strong>{f.title}</strong>
-                                </button>
-                                <small>
-                                  <a
-                                    href={siteOf(f)}
-                                    target="_blank"
-                                    rel="noreferrer"
+                      .filter((f) => status === "all" || f.health === status)
+                      .map((f) => {
+                        const issue = feedIssue(f);
+                        return (
+                          <div key={f.id} className={feedClass(f)}>
+                            <div className="feed-cell">
+                              <input
+                                type="checkbox"
+                                aria-label={"Select " + f.title}
+                                checked={ids.includes(f.id)}
+                                onChange={(e) =>
+                                  setIds(
+                                    e.target.checked
+                                      ? [...ids, f.id]
+                                      : ids.filter((id) => id !== f.id),
+                                  )
+                                }
+                              />
+                              <div className="feed-info">
+                                <i className="hue-dot" />
+                                <span>
+                                  <button
+                                    className="feed-open"
+                                    onClick={() => openFeed(f)}
                                   >
-                                    {siteOf(f)}
-                                  </a>
-                                </small>
-                              </span>
+                                    <strong>{f.title}</strong>
+                                  </button>
+                                  <small>
+                                    <a
+                                      href={siteOf(f)}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      {siteOf(f)}
+                                    </a>
+                                  </small>
+                                </span>
+                              </div>
                             </div>
+                            <span className="feed-folder">
+                              {f.folder_id === "inbox"
+                                ? "—"
+                                : data.folders.find((x) => x.id === f.folder_id)
+                                    ?.name}
+                            </span>
+                            <span className="feed-unread">{f.unread}</span>
+                            <span
+                              className={
+                                "feed-updated " +
+                                (issue?.kind || (f.checked ? "healthy" : ""))
+                              }
+                            >
+                              {issue?.label || elapsed(f.checked)}
+                            </span>
+                            <span>
+                              {issue && (
+                                <span
+                                  className={"feed-issue " + issue.kind}
+                                  title={issue.note}
+                                  aria-label={issue.note}
+                                >
+                                  !
+                                </span>
+                              )}
+                            </span>
+                            <IconButton
+                              icon={MoreHorizontal}
+                              label={"Edit " + f.title}
+                              onClick={() => openFeed(f)}
+                            />
                           </div>
-                          <span className="feed-folder">
-                            {f.folder_id === "inbox"
-                              ? "—"
-                              : data.folders.find((x) => x.id === f.folder_id)
-                                  ?.name}
-                          </span>
-                          <span className="feed-unread">{f.unread}</span>
-                          <span
-                            className={
-                              "feed-updated " +
-                              (feedIssue(f)?.kind ||
-                                (f.checked ? "healthy" : ""))
-                            }
-                          >
-                            {feedIssue(f)?.label || elapsed(f.checked)}
-                          </span>
-                          <span>
-                            {feedIssue(f) && (
-                              <span
-                                className={"feed-issue " + feedIssue(f).kind}
-                                title={feedIssue(f).note}
-                                aria-label={feedIssue(f).note}
-                              >
-                                !
-                              </span>
-                            )}
-                          </span>
-                          <IconButton
-                            icon={MoreHorizontal}
-                            label={"Edit " + f.title}
-                            onClick={() => openFeed(f)}
-                          />
-                        </div>
-                      ))}
+                        );
+                      })}
                   </div>
                   {!data.feeds.length && (
                     <div className="list-empty">
@@ -2559,21 +2497,7 @@ function Library({
                       />
                     </>
                   )}
-                  {j.status === "failed" && (
-                    <button
-                      onClick={() =>
-                        submit(() =>
-                          act(
-                            "enqueue",
-                            { kind: "download", payload: j.payload },
-                            "Download queued again",
-                          ),
-                        )
-                      }
-                    >
-                      Retry
-                    </button>
-                  )}
+                  <RetryJob job={j} act={act} submit={submit} />
                 </div>
               ))}
               {!downloads.length && (
@@ -2678,22 +2602,19 @@ function siteOf(f) {
 }
 
 function FeedEditor({ feed: f, data, act, onBack }) {
-  const [error, setError] = useState(""),
+  const { error, setError, submit } = useSubmit(),
     [folderId, setFolderId] = useState(f.folder_id);
   async function save(e) {
     e.preventDefault();
     const p = Object.fromEntries(new FormData(e.currentTarget));
-    try {
-      await act(
+    const done = await submit(() =>
+      act(
         "edit_feed",
         {
           id: f.id,
           title: p.title,
           folder_id: p.folder_id,
-          tags: p.tags
-            .split(",")
-            .map((s) => s.trim())
-            .filter(Boolean),
+          tags: parseTags(p.tags),
           options: {
             ...f.options,
             interval: p.interval ? Number(p.interval) : null,
@@ -2710,11 +2631,9 @@ function FeedEditor({ feed: f, data, act, onBack }) {
           },
         },
         "Feed settings saved",
-      );
-      onBack();
-    } catch (err) {
-      setError(err.message);
-    }
+      ),
+    );
+    if (done) onBack();
   }
   return (
     <form onSubmit={save}>
@@ -2917,21 +2836,7 @@ function JobsLog({ data, act, submit }) {
             {j.error && <small>{j.error}</small>}
           </span>
           <span className={"job-" + j.status}>{j.status}</span>
-          {j.status === "failed" && (
-            <button
-              onClick={() =>
-                submit(() =>
-                  act(
-                    "enqueue",
-                    { kind: j.kind, payload: j.payload },
-                    "Job queued again",
-                  ),
-                )
-              }
-            >
-              Retry
-            </button>
-          )}
+          <RetryJob job={j} act={act} submit={submit} />
         </div>
       ))}
     </details>

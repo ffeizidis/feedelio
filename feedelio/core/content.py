@@ -86,12 +86,37 @@ def local_frame_origin(url: str) -> str:
     return f"http://{host}" + (f":{parts.port}" if parts.port else "")
 
 
+USER_AGENT = "Feedelio/0.1 (+private feed reader)"
+
+
+def request_headers(options=None, cookie=None):
+    """Who Feedelio says it is, per feed: one place, so every request agrees."""
+    options = options or {}
+    headers = {"User-Agent": options.get("user_agent") or USER_AGENT}
+    if cookie or options.get("cookie"):
+        headers["Cookie"] = cookie or options["cookie"]
+    return headers
+
+
+def bounded(chunks, max_bytes, what="Response"):
+    """Yield a streamed body, refusing to hold more than max_bytes of it."""
+    size = 0
+    for chunk in chunks:
+        size += len(chunk)
+        if size > max_bytes:
+            raise ValueError(f"{what} exceeds the configured size limit.")
+        yield chunk
+
+
+def is_youtube(url):
+    host = (urlsplit(url).hostname or "").removeprefix("www.").removeprefix("m.")
+    return host in ("youtube.com", "youtu.be")
+
+
 def fetch(url: str, options=None, max_bytes=8_000_000):
     options = options or {}
-    headers = {"User-Agent": options.get("user_agent") or "Feedelio/0.1 (+private feed reader)"}
+    headers = request_headers(options)
     credential_origin = origin(options.get("cookie_origin") or url)
-    if options.get("cookie"):
-        headers["Cookie"] = options["cookie"]
     with http_client(options, timeout=30) as client:
         for _ in range(10):
             safe_url(url)
@@ -102,12 +127,8 @@ def fetch(url: str, options=None, max_bytes=8_000_000):
                     url = urljoin(url, response.headers["location"])
                     continue
                 response.raise_for_status()
-                data = bytearray()
-                for chunk in response.iter_bytes():
-                    data.extend(chunk)
-                    if len(data) > max_bytes:
-                        raise ValueError("Response exceeds the configured size limit.")
-                return bytes(data), str(response.url), response.headers
+                data = b"".join(bounded(response.iter_bytes(), max_bytes))
+                return data, str(response.url), response.headers
     raise ValueError("Too many redirects.")
 
 
@@ -247,7 +268,7 @@ def provided_transcript(soup, data, document_url, options):
 def embed_url(url, invidious=""):
     parts = urlsplit(url)
     video = None
-    if parts.hostname in ("youtube.com", "www.youtube.com", "m.youtube.com"):
+    if (parts.hostname or "").removeprefix("www.").removeprefix("m.") == "youtube.com":
         video = dict(parse_qsl(parts.query)).get("v")
         if parts.path.startswith(("/shorts/", "/embed/")):
             video = parts.path.split("/")[2]
@@ -287,8 +308,7 @@ def probe_video(url, options=None):
     else; the SOCS cookie declines the consent prompt.
     """
     id = video_id(url)
-    headers = {"User-Agent": (options or {}).get("user_agent") or "Feedelio/0.1 (+private feed reader)"}
-    headers["Cookie"] = "SOCS=CAI"
+    headers = request_headers(options, cookie="SOCS=CAI")
     video = dict(short=False, url=url, duration=0, title="", description="", author="", published=None)
     with http_client(options, timeout=30) as client:
         response = client.head(f"https://www.youtube.com/shorts/{id}", headers=headers)

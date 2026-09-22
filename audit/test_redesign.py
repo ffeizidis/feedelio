@@ -67,10 +67,10 @@ def test_feed_list_omits_repeated_source_and_sidebar_is_larger(lab):
     p.keyboard.press("a")
     expect(p.locator(".row-feed")).to_have_count(41)
     for selector, size in [
-        (".views button", 18),
-        (".feed-line", 17),
-        (".folder-line > button:not(.disclosure)", 16),
-        (".search-trigger", 16),
+        (".views button", 20),
+        (".feed-line", 19),
+        (".folder-line > button:not(.disclosure)", 18),
+        (".search-trigger", 18),
     ]:
         assert p.locator(selector).first.evaluate("e=>parseFloat(getComputedStyle(e).fontSize)") == size
     icon_url = p.locator('link[rel="icon"]').get_attribute("href")
@@ -126,9 +126,11 @@ def test_three_panes_geometry_and_independent_targets(lab, width):
         p.mouse.up()
         lab.until(lambda: lab.api("overview")["settings"][setting] > before)
     p.keyboard.press("3")
-    expect(p.locator(".article-list")).to_have_class("article-list compact")
+    expect(p.locator(".article-list")).to_have_class(re.compile(r"\bcompact\b"))
     p.reload()
-    expect(p.locator(".article-list")).to_have_class("article-list compact")
+    # Reopened by its address, the article shows inside its own feed's stream,
+    # so the list carries single-feed alongside the remembered display mode.
+    expect(p.locator(".article-list")).to_have_class(re.compile(r"\bcompact\b"))
     assert p.locator(".article-row").first.bounding_box()["height"] == 28
     p.keyboard.press("2")
     expect(p.locator(".row-snippet").first).to_be_visible()

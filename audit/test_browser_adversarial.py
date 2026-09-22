@@ -80,7 +80,7 @@ def test_four_formats_opml_polling_conditional_get_and_bad_feed(lab):
     assert next(f for f in lab.api("overview")["feeds"] if f["title"] == "Broken")["health"] == "error"
     p.keyboard.press("Escape")
     p.get_by_role("button", name="Update now", exact=True).first.click()
-    lab.finish_jobs()
+    lab.finish_jobs(expect="refresh")
     headers = [r["headers"] for r in lab.requests if r["path"] == "/rss"][-1]
     assert headers.get("If-None-Match") == '"v1"'
     assert headers.get("If-Modified-Since") == "Tue, 15 Sep 2026 10:00:00 GMT"
@@ -207,8 +207,14 @@ def test_nested_folder_cycle_bulk_rename_move_delete_undo(lab):
     p = lab.page
     lab.manager("Folders")
     p.get_by_role("button", name="Edit folder Parent", exact=True).click()
-    # The redesign prevents cycles before submission by excluding descendants.
-    expect(p.locator(f'dialog select[name="parent"] option[value="{child}"]')).to_have_count(0)
+    # The redesign prevents cycles before submission by excluding descendants,
+    # so the parent dropdown offers Top level but never Parent's own subtree.
+    p.get_by_role("combobox", name="Put folder under").click()
+    choices = p.get_by_role("listbox", name="Put folder under")
+    expect(choices.get_by_role("option", name="Top level", exact=True)).to_be_visible()
+    expect(choices.get_by_role("option", name="Parent", exact=True)).to_have_count(0)
+    expect(choices.get_by_role("option", name="Child", exact=True)).to_have_count(0)
+    p.keyboard.press("Escape")
     p.get_by_role("button", name="Cancel", exact=True).click()
     lab.manager("Subscriptions")
     p.get_by_role("button", name="Edit First feed", exact=True).click()
@@ -217,7 +223,7 @@ def test_nested_folder_cycle_bulk_rename_move_delete_undo(lab):
     expect(p.locator(".feed-info").filter(has_text="Renamed journal")).to_be_visible()
     p.get_by_role("checkbox", name="Select Renamed journal", exact=True).check()
     p.get_by_role("checkbox", name="Select Second feed", exact=True).check()
-    p.get_by_role("combobox", name="Move selected feeds", exact=True).select_option("inbox")
+    lab.pick("Move selected feeds", "Unfiled")
     lab.until(lambda: all(f["folder_id"] == "inbox" for f in lab.api("overview")["feeds"]))
     p.get_by_role("textbox", name="Batch feed tags", exact=True).fill("research, reading")
     p.get_by_role("button", name="Set tags", exact=True).click()
@@ -347,7 +353,7 @@ def test_full_text_canonical_paywall_rewrite_transcript_search_and_obsidian(lab)
     lab.close()
     lab.open_title("Summary article")
     p.get_by_role("button", name="Fetch full text", exact=True).click()
-    lab.finish_jobs()
+    lab.finish_jobs(expect="extract")
     p.reload()
     lab.open_title("Summary article")
     expect(p.locator(".prose")).to_contain_text("replacement")
@@ -399,7 +405,7 @@ def test_rules_star_tag_drop_short_and_timeout(lab):
     p.get_by_role("button", name="Preview changes", exact=True).click()
     expect(p.locator(".rule-preview")).to_contain_text("would change")
     p.get_by_role("button", name="Apply these changes", exact=True).click()
-    lab.finish_jobs()
+    lab.finish_jobs(expect="rules")
     lab.close()
     p.reload()
     expect(p.locator(".article-row")).to_have_count(2)
@@ -454,7 +460,7 @@ def test_real_audio_download_offline_playback_and_full_backup(lab):
     expect(p.locator("audio")).to_have_attribute("preload", "none")
     expect(p.locator(".transcript")).to_contain_text("xenobiology")
     p.locator(".podcast").get_by_role("button", name="Download", exact=True).click()
-    lab.finish_jobs()
+    lab.finish_jobs(expect="download")
     p.reload()
     lab.open_title("Podcast episode")
     lab.routes["/episode.wav"] = (503, {}, "Offline publisher")

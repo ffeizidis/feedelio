@@ -105,7 +105,12 @@ class Lab:
                 stderr=self.logs,
             )
 
-    def finish_jobs(self, archives=False):
+    def finish_jobs(self, archives=False, expect=None):
+        # A button that enqueues work posts asynchronously, so an empty queue
+        # may only mean the request has not landed yet. Callers that just
+        # clicked name the kind they are waiting for.
+        if expect:
+            self.until(lambda: any(j["kind"] == expect for j in self.api("overview")["jobs"]))
         self.start_worker()
         self.until(
             lambda: (

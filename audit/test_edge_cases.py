@@ -71,7 +71,7 @@ def test_feed_fetch_uses_real_http_proxy(lab):
         p.get_by_role("button", name="Save feed settings", exact=True).click()
         lab.close()
         p.get_by_role("button", name="Update now", exact=True).first.click()
-        lab.finish_jobs()
+        lab.finish_jobs(expect="refresh")
         assert lab.publisher + "/feed" in calls
     finally:
         proxy.shutdown()
@@ -94,7 +94,7 @@ def test_quiet_feed_detection_in_browser(lab):
     lab.show()
     lab.manager("Subscriptions")
     expect(lab.page.locator(".feed-updated.stale")).to_contain_text("stale")
-    expect(lab.page.locator(".feed-issue")).to_have_attribute("title", "No new items in 14 days or more")
+    expect(lab.page.locator(".feed-issue")).to_have_attribute("title", "No new items in two weeks or more")
 
 
 @pytest.mark.features(8, 13, 20)
@@ -225,7 +225,7 @@ def test_linkless_hash_entries_remain_distinct(lab):
     lab.page.reload()
     expect(lab.page.locator(".article-row")).to_have_count(2)
     lab.page.get_by_role("button", name="Update now", exact=True).first.click()
-    lab.finish_jobs()
+    lab.finish_jobs(expect="refresh")
     lab.page.reload()
     expect(lab.page.locator(".article-row")).to_have_count(2)
 
@@ -248,7 +248,7 @@ def test_multiple_audio_enclosures_keep_their_own_download(lab):
     p = lab.page
     expect(p.locator("audio")).to_have_count(2)
     p.locator(".podcast").first.get_by_role("button", name="Download", exact=True).click()
-    lab.finish_jobs()
+    lab.finish_jobs(expect="download")
     p.reload()
     lab.open_title("Two audio tracks")
     assert "/api/downloads/" in p.locator("audio").nth(0).get_attribute("src")
@@ -331,7 +331,7 @@ def test_automatic_readability_and_provided_caption_track(lab):
     lab.show()
     lab.open_title("Readability summary")
     lab.page.get_by_role("button", name="Fetch full text", exact=True).click()
-    lab.finish_jobs()
+    lab.finish_jobs(expect="extract")
     lab.page.reload()
     lab.open_title("Readability summary")
     expect(lab.page.locator(".prose")).to_contain_text("atmospheric distortion")

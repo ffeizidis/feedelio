@@ -184,6 +184,13 @@ const fullDate = (value) =>
     day: "numeric",
     year: "numeric",
   });
+// A tooltip over a title that already fits is noise, so the attribute is
+// attached on hover, when the browser can say whether the pane cut it off.
+const fullOnHover = (e) => {
+  const el = e.currentTarget;
+  if (el.scrollWidth > el.clientWidth) el.title = el.textContent;
+  else el.removeAttribute("title");
+};
 // Each open layer (article, library, feed editor) owns one history entry, so
 // Back closes the top layer. The stack is the source of truth; history.go on
 // our own closes is absorbed by the skip counter in the popstate handler.
@@ -987,7 +994,7 @@ function App() {
             </button>
             <button onClick={() => stream("all", { folder_id: f.id })}>
               <Folder size={15} />
-              <span>{f.name}</span>
+              <span onMouseEnter={fullOnHover}>{f.name}</span>
               <span className="count" data-unread={f.unread}>
                 {f.unread || ""}
               </span>
@@ -1011,7 +1018,7 @@ function App() {
                     onClick={() => stream("all", { feed_id: f.id })}
                   >
                     <i className="hue-dot" />
-                    <span>{f.title}</span>
+                    <span onMouseEnter={fullOnHover}>{f.title}</span>
                     {f.health === "error" && (
                       <AlertCircle size={13} className="error-color" />
                     )}
@@ -1347,12 +1354,17 @@ function App() {
                 {!scope.feed_id && (
                   <button
                     className="row-feed"
+                    onMouseEnter={fullOnHover}
                     onClick={() => stream("all", { feed_id: item.feed_id })}
                   >
                     {item.feed_title}
                   </button>
                 )}
-                <button className="row-title" onClick={() => openTitle(item)}>
+                <button
+                  className="row-title"
+                  onMouseEnter={fullOnHover}
+                  onClick={() => openTitle(item)}
+                >
                   <ArticleMarks item={item} />
                   <Highlight text={item.title} query={q} />
                 </button>

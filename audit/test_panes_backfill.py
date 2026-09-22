@@ -59,7 +59,8 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab, viewport_widt
     expect(p.locator(".article-list")).to_have_class("article-list title single-feed")
     expect(p.locator(".row-feed")).to_have_count(0)
     p.reload()
-    expect(p.locator(".article-list")).to_have_class("article-list title")
+    # The feed's address survives the reload, so the stream stays on that feed.
+    expect(p.locator(".article-list")).to_have_class("article-list title single-feed")
     assert p.locator(".sidebar").bounding_box()["width"] > 340
     p.keyboard.press("2")
     expect(p.locator(".article-row p")).to_have_count(35)
@@ -92,11 +93,11 @@ def test_archive_progress_pause_resume_and_failure_visible(lab):
     lab.manager("Feeds")
     p.get_by_role("button", name="Edit Archive source", exact=True).click()
     progress = p.get_by_label("Archive progress")
-    expect(progress).to_contain_text("Archive waiting")
+    expect(progress).to_contain_text("Archive in progress")
     p.get_by_role("button", name="Pause archive", exact=True).click()
     expect(progress).to_contain_text("Archive paused")
     p.get_by_role("button", name="Resume archive", exact=True).click()
-    expect(progress).to_contain_text("Archive waiting")
+    expect(progress).to_contain_text("Archive in progress")
     with lab.core.db:
         lab.core.db.execute(
             "UPDATE jobs SET status='failed',error='Publisher returned 403; archive access unavailable' WHERE id=?",

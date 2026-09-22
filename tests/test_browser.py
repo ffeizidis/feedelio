@@ -425,3 +425,39 @@ def test_a_long_dropdown_is_narrowed_by_typing(core, site, web_server):
         expect(page.get_by_role("textbox", name="Search Scope")).to_have_value("")
         expect(page.get_by_role("listbox", name="Scope").get_by_role("option")).to_have_count(13)
         browser.close()
+
+
+def test_a_clipped_title_shows_in_full_on_hover(core, site, web_server):
+    """A pane too narrow for a name hides the rest of it; hovering gets it back."""
+    base, _, _ = site
+    long_title = "An unusually expansive headline about the quiet persistence of ordinary afternoons"
+    long_feed = "The Exceptionally Long-Winded Quarterly Review of Gardening and Related Pastimes"
+    long_folder = "Essays, criticism and other things worth a slow read"
+    folder = core.save_folder(long_folder)["id"]
+    feed = core.subscribe(base + "/rss", folder, long_feed)["id"]
+    core.refresh(feed)
+    core.ingest(feed, "long", long_title, base + "/long", "<p>Body.</p>")
+    core.ingest(feed, "short", "A short one", base + "/short", "<p>Body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1100, "height": 900})
+        page.goto(web_server)
+
+        feed_name = page.locator(".feed-line").filter(has_text=long_feed).locator("span").first
+        feed_name.hover()
+        expect(feed_name).to_have_attribute("title", long_feed)
+        folder_name = page.locator(".folder-line > button:not(.disclosure) > span").first
+        folder_name.hover()
+        expect(folder_name).to_have_attribute("title", long_folder)
+
+        page.locator(".feed-line").filter(has_text=long_feed).click()
+        clipped = page.locator(".row-title").filter(has_text="unusually expansive")
+        clipped.hover()
+        expect(clipped).to_have_attribute("title", long_title)
+
+        # A name the pane shows in full needs no tooltip repeating it.
+        fits = page.locator(".row-title").filter(has_text="A short one")
+        fits.hover()
+        expect(fits).not_to_have_attribute("title", re.compile(r".*"))
+        browser.close()

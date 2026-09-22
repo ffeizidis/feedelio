@@ -129,6 +129,11 @@ class Lab:
         tab = {"Subscriptions": "Feeds", "Data & connections": "Import & export"}.get(tab, tab)
         self.page.locator(".dialog-tabs").get_by_role("button", name=tab, exact=True).click()
 
+    def pick(self, label, option):
+        """Choose an option from one of the app's dropdowns."""
+        self.page.get_by_role("combobox", name=label).click()
+        self.page.get_by_role("listbox", name=label).get_by_role("option", name=option, exact=True).click()
+
     def close(self):
         label = "Close library" if self.page.locator(".library-screen").count() else "Close dialog"
         self.page.get_by_role("button", name=label, exact=True).click()

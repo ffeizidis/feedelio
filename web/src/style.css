@@ -2371,3 +2371,47 @@ dialog.wide {
     min-height: 100dvh;
   }
 }
+
+.rule-form textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  resize: vertical;
+}
+.rule-form .switch-control {
+  margin-bottom: 19px;
+}
+.rule-line-error,
+.rule-line-warning {
+  margin: -12px 0 14px;
+  font-size: 13px;
+}
+.rule-line-error {
+  color: var(--danger, #b3261e);
+}
+.rule-line-warning {
+  color: var(--muted);
+}
+.rule-apply {
+  margin-top: 26px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.rule-preview {
+  font-size: 13px;
+}
+.rule-preview ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+.rule-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+.rule-preview-table td {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.rule-preview-table td + td {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 export const feedClass = (feed) => `feed-hue-${feed?.options?.hue ?? 0}`;
 
@@ -851,6 +852,392 @@ export function FolderManager({ data, act, onEdit, onNew }) {
           Drop a folder here to move it to the top level.
         </p>
       </div>
+    </>
+  );
+}
+
+const RULE_FIELDS = ["title", "body", "url", "author", "tags"];
+const RULE_ACTIONS = ["read", "star", "tag", "drop", "rewrite"];
+const BLANK = {
+  name: "",
+  field: "title",
+  pattern: "",
+  action: "read",
+  value: "",
+  feed_id: "",
+  is_regex: true,
+};
+
+// The add/edit sheet. A Modal rather than fields revealed in place, so closing it
+// unmounts the dropdowns and the next rule genuinely starts from the defaults.
+function RuleSheet({ data, act, api, rule, onClose, Modal, Field }) {
+  const { error, submit, busy } = useSubmit(),
+    [form, setForm] = useState({ ...BLANK, ...(rule || {}) }),
+    [check, setCheck] = useState(null),
+    request = useRef(0);
+  const set = (key) => (v) => setForm((f) => ({ ...f, [key]: v }));
+  // Checked by the same engine that runs the rules, so this cannot pass what the
+  // server would reject. Debounced, and stale replies are dropped.
+  useEffect(() => {
+    if (!form.pattern.trim()) return setCheck(null);
+    const ticket = ++request.current;
+    const timer = setTimeout(() => {
+      api("rules/validate", {
+        payload: {
+          pattern: form.pattern,
+          is_regex: !!form.is_regex,
+          action: form.action,
+          value: form.value,
+          field: form.field,
+        },
+      })
+        .then((r) => ticket === request.current && setCheck(r))
+        .catch(() => {});
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [form.pattern, form.is_regex, form.action, form.value, form.field]);
+  const broken = (check?.errors || []).filter((e) => e.error),
+    slow = (check?.errors || []).filter((e) => e.slow),
+    blocked = busy || !form.pattern.trim() || broken.length > 0;
+  return (
+    <Modal title={rule ? "Edit rule" : "New rule"} onClose={onClose}>
+      <form
+        className="dialog-body rule-form"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const saved = await submit(() =>
+            act(
+              "save_rule",
+              { ...form, feed_id: form.feed_id || null },
+              rule ? "Rule saved" : "Rule added",
+              { invalidate: [["rules"]] },
+            ),
+          );
+          if (saved) onClose();
+        }}
+      >
+        <Field label="Rule name">
+          <input
+            name="name"
+            required
+            value={form.name}
+            onChange={(e) => set("name")(e.target.value)}
+            placeholder="Keep the good stuff"
+          />
+        </Field>
+        <div className="form-grid">
+          <Field label="Match field">
+            <Select
+              label="Match field"
+              value={form.field}
+              onChange={set("field")}
+              options={RULE_FIELDS.map((x) => ({ value: x, label: x }))}
+            />
+          </Field>
+          <Field label="Action">
+            <Select
+              label="Action"
+              value={form.action}
+              onChange={set("action")}
+              options={RULE_ACTIONS.map((x) => ({ value: x, label: x }))}
+            />
+          </Field>
+        </div>
+        <Field
+          label={form.is_regex ? "Patterns (regex)" : "Patterns (plain text)"}
+          hint={
+            form.is_regex
+              ? "One per line — the rule runs if any line matches."
+              : "One per line, matched literally, ignoring case."
+          }
+        >
+          <textarea
+            name="pattern"
+            rows={3}
+            required
+            spellCheck={false}
+            value={form.pattern}
+            onChange={(e) => set("pattern")(e.target.value)}
+            placeholder="subscribe to continue"
+          />
+        </Field>
+        <Switch
+          label="Regular expression"
+          checked={!!form.is_regex}
+          onChange={set("is_regex")}
+        />
+        {broken.map((e) => (
+          <p className="rule-line-error" key={e.line} role="alert">
+            Line {e.line}: {e.error}
+          </p>
+        ))}
+        {slow.map((e) => (
+          <p className="rule-line-warning" key={e.line}>
+            Line {e.line} is very slow to match and may time out.
+          </p>
+        ))}
+        {check?.value_error && (
+          <p className="rule-line-error" role="alert">
+            {check.value_error}
+          </p>
+        )}
+        {(form.action === "tag" || form.action === "rewrite") && (
+          <Field
+            label={form.action === "tag" ? "Tag to add" : "Replacement"}
+            hint={
+              form.action === "rewrite"
+                ? "Substituted into the article body for every matching line."
+                : undefined
+            }
+          >
+            <input
+              name="value"
+              value={form.value}
+              onChange={(e) => set("value")(e.target.value)}
+            />
+          </Field>
+        )}
+        <Field label="Scope">
+          <Select
+            label="Scope"
+            value={form.feed_id || ""}
+            onChange={set("feed_id")}
+            options={[
+              { value: "", label: "All feeds" },
+              ...data.feeds.map((f) => ({ value: f.id, label: f.title })),
+            ]}
+          />
+        </Field>
+        {error && (
+          <p role="alert" className="inline-error">
+            {error}
+          </p>
+        )}
+        <div className="form-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary" disabled={blocked}>
+            {rule ? "Save rule" : "Add rule"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+// What applying the stored rules would do, counted exactly, before it is done.
+function RulePreview({ api, act }) {
+  const { error, submit, busy } = useSubmit(),
+    cache = useQueryClient(),
+    [seen, setSeen] = useState(null);
+  const total = seen
+    ? Object.entries(seen.actions).filter(([, n]) => n > 0)
+    : [];
+  return (
+    <div className="rule-apply">
+      <div className="form-actions">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            submit(async () => setSeen(await api("rules/preview")))
+          }
+        >
+          {busy ? "Counting…" : "Preview changes"}
+        </button>
+        {seen && seen.changed > 0 && (
+          <button
+            className="primary"
+            type="button"
+            onClick={() =>
+              submit(async () => {
+                await act(
+                  "enqueue",
+                  { kind: "rules" },
+                  "Applying rules to stored articles",
+                  { invalidate: [["overview"]] },
+                );
+                setSeen(null);
+                cache.removeQueries({ queryKey: ["rules", "preview"] });
+              })
+            }
+          >
+            Apply these changes
+          </button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="inline-error">
+          {error}
+        </p>
+      )}
+      {seen && (
+        <div className="rule-preview">
+          <p>
+            <strong>{seen.changed.toLocaleString()}</strong> of{" "}
+            {seen.processed.toLocaleString()} stored articles would change.
+          </p>
+          {total.length > 0 && (
+            <ul>
+              {total.map(([action, n]) => (
+                <li key={action}>
+                  {n.toLocaleString()} {action}
+                </li>
+              ))}
+            </ul>
+          )}
+          {seen.rules.some((r) => r.changed > 0) && (
+            <table className="rule-preview-table">
+              <tbody>
+                {seen.rules
+                  .filter((r) => r.changed > 0)
+                  .map((r) => (
+                    <tr key={r.id}>
+                      <td>{r.name}</td>
+                      <td>{r.changed.toLocaleString()}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+          {seen.timeouts > 0 && (
+            <p className="rule-line-warning">
+              {seen.timeouts.toLocaleString()} article
+              {seen.timeouts === 1 ? "" : "s"} took too long to match and would
+              be skipped. Simplify the pattern.
+            </p>
+          )}
+          {seen.actions.rewrite > 0 && (
+            <p className="rule-line-warning">
+              Rewritten article bodies cannot be restored. Back up first.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function RulesManager({
+  data,
+  rules,
+  act,
+  api,
+  Modal,
+  Field,
+  IconButton,
+  Pencil,
+  Trash2,
+}) {
+  const { error, submit } = useSubmit(),
+    cache = useQueryClient(),
+    [sheet, setSheet] = useState(null);
+  // The row moves now; the scoped refetch behind it only confirms. Kept local
+  // rather than generalised, since only the rules list is edited this directly.
+  const patch = (fn) =>
+    cache.setQueryData(["rules"], (rs) => (rs || []).map(fn));
+  const preset = (rule) =>
+    submit(() =>
+      act("save_rule", rule, "Rule added", { invalidate: [["rules"]] }),
+    );
+  return (
+    <>
+      <p className="muted">
+        Rules run on new articles and extracted content, in the order below.
+      </p>
+      <div className="rule-presets">
+        <button
+          onClick={() =>
+            preset({
+              id: "shorts",
+              name: "Skip YouTube Shorts",
+              field: "url",
+              pattern: "youtube\\.com/shorts/",
+              action: "read",
+            })
+          }
+        >
+          + Skip YouTube Shorts
+        </button>
+        <button
+          onClick={() =>
+            preset({
+              id: "paywall",
+              name: "Skip paywalled articles",
+              field: "tags",
+              pattern: "paywall",
+              action: "read",
+            })
+          }
+        >
+          + Mark paywalls as read
+        </button>
+        <button className="primary" onClick={() => setSheet({})}>
+          + Add new rule
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="inline-error">
+          {error}
+        </p>
+      )}
+      {rules.data?.map((r) => (
+        <div className="rule-row" key={r.id}>
+          <input
+            aria-label={"Enable " + r.name}
+            type="checkbox"
+            checked={!!r.enabled}
+            onChange={(e) => {
+              const enabled = e.target.checked;
+              patch((x) => (x.id === r.id ? { ...x, enabled } : x));
+              submit(() =>
+                act("save_rule", { ...r, enabled }, undefined, {
+                  invalidate: [["rules"]],
+                }),
+              ).catch(() => cache.invalidateQueries({ queryKey: ["rules"] }));
+            }}
+          />
+          <span>
+            <strong>{r.name}</strong>
+            <small>
+              {r.field} {r.is_regex ? "matches" : "contains"}{" "}
+              {(r.pattern || "").split("\n").filter(Boolean).join(" · ")} →{" "}
+              {r.action} {r.value}
+            </small>
+          </span>
+          <IconButton
+            icon={Pencil}
+            label={"Edit " + r.name}
+            onClick={() => setSheet(r)}
+          />
+          <IconButton
+            icon={Trash2}
+            label={"Delete " + r.name}
+            onClick={() => {
+              if (!confirm(`Delete the rule “${r.name}”?`)) return;
+              submit(() =>
+                act("delete_rule", { id: r.id }, "Rule deleted", {
+                  invalidate: [["rules"]],
+                }),
+              );
+            }}
+          />
+        </div>
+      ))}
+      {!rules.data?.length && <p className="muted">No rules yet.</p>}
+      <RulePreview api={api} act={act} />
+      {sheet && (
+        <RuleSheet
+          data={data}
+          act={act}
+          api={api}
+          rule={sheet.id ? sheet : null}
+          onClose={() => setSheet(null)}
+          Modal={Modal}
+          Field={Field}
+        />
+      )}
     </>
   );
 }

@@ -245,7 +245,9 @@ def test_desktop_reading_workflow(core, site, web_server):
         log = page.locator("details.jobs-log")
         expect(log.locator(".job-row").first).to_be_hidden()  # Collapsed until opened.
         log.locator("summary").click()
-        expect(log.locator(".job-row").first.locator("time")).to_have_attribute("datetime", re.compile(r"^\d{4}-"))
+        expect(log.locator(".job-row").first.locator("time")).to_have_attribute(
+            "datetime", re.compile(r"^\d{4}-")
+        )
         expect(log.locator(".job-row", has_text="backfill The Sunday Journal")).to_be_visible()
         page.get_by_role("button", name="Activity", exact=True).click()
         expect(page.get_by_text("Archive size · 3 articles")).to_be_visible()
@@ -291,4 +293,70 @@ def test_desktop_reading_workflow(core, site, web_server):
             == 3
         )
         assert not errors, errors
+        browser.close()
+
+
+def test_rules_are_edited_previewed_and_applied(core, site, web_server):
+    """The rules tab: a gated form, an edit that keeps its place, an exact dry run."""
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "The Sunday Journal")["id"]
+    for i, title in enumerate(["An advert here", "A keeper", "Plain reading"]):
+        core.ingest(feed, str(i), title, f"{base}/a{i}", "<p>Ordinary body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(web_server)
+        page.get_by_role("button", name="Manage library").click()
+        page.get_by_role("button", name="Rules", exact=True).click()
+
+        # The fields stay out of the way until they are asked for.
+        expect(page.locator(".rule-form")).to_have_count(0)
+        page.get_by_role("button", name="+ Add new rule", exact=True).click()
+        form = page.locator(".rule-form")
+        expect(form).to_be_visible()
+
+        # A pattern the engine cannot compile is refused before it can be saved.
+        form.locator("input[name=name]").fill("Skip adverts")
+        form.locator("textarea[name=pattern]").fill("[")
+        expect(page.locator(".rule-line-error")).to_contain_text("Line 1")
+        expect(form.get_by_role("button", name="Add rule", exact=True)).to_be_disabled()
+
+        # One rule, two patterns, either of which fires it.
+        form.locator("textarea[name=pattern]").fill("advert\nkeeper")
+        expect(page.locator(".rule-line-error")).to_have_count(0)
+        form.get_by_role("button", name="Add rule", exact=True).click()
+        expect(page.locator(".rule-row")).to_have_count(1)
+        expect(page.locator(".rule-form")).to_have_count(0)  # It closes behind itself.
+
+        # A second rule, so the edit below has an order to preserve.
+        page.get_by_role("button", name="+ Add new rule", exact=True).click()
+        page.locator(".rule-form input[name=name]").fill("Star keepers")
+        page.locator(".rule-form textarea[name=pattern]").fill("keeper")
+        pick(page, "Action", "star")
+        page.locator(".rule-form").get_by_role("button", name="Add rule", exact=True).click()
+        expect(page.locator(".rule-row")).to_have_count(2)
+
+        # Editing reopens the same form, filled in, and the rule keeps its place.
+        page.get_by_role("button", name="Edit Skip adverts", exact=True).click()
+        expect(page.locator(".rule-form input[name=name]")).to_have_value("Skip adverts")
+        expect(page.locator(".rule-form textarea[name=pattern]")).to_have_value("advert\nkeeper")
+        page.locator(".rule-form input[name=name]").fill("Skip the adverts")
+        page.locator(".rule-form").get_by_role("button", name="Save rule", exact=True).click()
+        expect(page.locator(".rule-row").first).to_contain_text("Skip the adverts")
+        expect(page.locator(".rule-row")).to_have_count(2)
+
+        # The dry run says exactly what applying would do, and applying does it.
+        page.get_by_role("button", name="Preview changes", exact=True).click()
+        expect(page.locator(".rule-preview")).to_contain_text("2 of 3 stored articles")
+        page.get_by_role("button", name="Apply these changes", exact=True).click()
+        expect(page.locator(".rule-preview")).to_have_count(0)
+
+        # Deleting asks first; dismissing it keeps the rule.
+        page.once("dialog", lambda d: d.dismiss())
+        page.get_by_role("button", name="Delete Star keepers", exact=True).click()
+        expect(page.locator(".rule-row")).to_have_count(2)
+        page.once("dialog", lambda d: d.accept())
+        page.get_by_role("button", name="Delete Star keepers", exact=True).click()
+        expect(page.locator(".rule-row")).to_have_count(1)
         browser.close()

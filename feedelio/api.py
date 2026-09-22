@@ -166,6 +166,20 @@ def rules():
         return core.rules()
 
 
+# Read-only, and deliberately not actions: a keystroke-debounced check must not
+# travel the action path that invalidates the whole client cache.
+@app.get("/api/rules/preview")
+def rules_preview():
+    with Core() as core:
+        return core.preview_rules()
+
+
+@app.post("/api/rules/validate")
+def rules_validate(command: Command):
+    with Core() as core:
+        return core.validate_rule(**command.payload)
+
+
 @app.get("/api/statistics")
 def statistics():
     with Core() as core:

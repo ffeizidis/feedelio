@@ -123,17 +123,24 @@ def test_regex_timeout_does_not_wedge_worker_or_browser(lab):
     lab.show()
     p = lab.page
     lab.manager("Rules")
+    p.get_by_role("button", name="+ Add new rule", exact=True).click()
     form = p.locator(".rule-form")
     form.locator("input[name=name]").fill("Pathological regex")
-    form.locator("input[name=pattern]").fill("(a+)+$")
-    form.locator("select[name=field]").select_option("body")
-    form.locator("select[name=action]").select_option("read")
+    form.locator("textarea[name=pattern]").fill("(a+)+$")
+    lab.pick("Match field", "body")
+    lab.pick("Action", "read")
+    # The draft is flagged as slow, but saving it is still allowed.
+    expect(p.locator(".rule-line-warning")).to_be_visible()
     form.get_by_role("button", name="Add rule", exact=True).click()
     expect(p.locator(".rule-row")).to_have_count(1)
-    p.get_by_role("button", name="Apply rules to existing articles", exact=True).click()
+    # The dry run reports the unmatchable article before anything is applied.
+    p.get_by_role("button", name="Preview changes", exact=True).click()
+    expect(p.locator(".rule-preview .rule-line-warning")).to_contain_text("too long")
+    lab.command("enqueue", {"kind": "rules"})
     lab.finish_jobs()
-    failed = [j for j in lab.api("overview")["jobs"] if j["kind"] == "rules" and j["status"] == "failed"]
-    assert failed and "timed out" in failed[0]["error"]
+    # One pathological pattern now costs its own articles, not the whole pass.
+    done = [j for j in lab.api("overview")["jobs"] if j["kind"] == "rules" and j["status"] == "done"]
+    assert done and done[0]["result"]["timeouts"] >= 1
     lab.close()
     lab.open_title("Regex adversary")
     expect(p.locator(".prose")).to_be_visible()

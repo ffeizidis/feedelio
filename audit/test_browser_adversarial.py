@@ -13,11 +13,14 @@ def stamp(hours):
 def add_rule(lab, name, field, pattern, action, value=""):
     p = lab.page
     lab.manager("Rules")
+    p.get_by_role("button", name="+ Add new rule", exact=True).click()
     form = p.locator(".rule-form")
-    for key, text in {"name": name, "pattern": pattern, "value": value}.items():
-        form.locator(f"input[name={key}]").fill(text)
-    form.locator("select[name=field]").select_option(field)
-    form.locator("select[name=action]").select_option(action)
+    form.locator("input[name=name]").fill(name)
+    form.locator("textarea[name=pattern]").fill(pattern)
+    lab.pick("Match field", field)
+    lab.pick("Action", action)
+    if value:
+        form.locator("input[name=value]").fill(value)
     form.get_by_role("button", name="Add rule", exact=True).click()
     expect(p.locator(".rule-row").filter(has_text=name)).to_be_visible()
 
@@ -392,7 +395,10 @@ def test_rules_star_tag_drop_short_and_timeout(lab):
     add_rule(lab, "Tag it", "title", "Save", "tag", "keeper")
     add_rule(lab, "Drop ads", "title", "advertisement", "drop")
     p.get_by_role("button", name="+ Skip YouTube Shorts", exact=True).click()
-    p.get_by_role("button", name="Apply rules to existing articles", exact=True).click()
+    # The dry run states the damage before any of it is done.
+    p.get_by_role("button", name="Preview changes", exact=True).click()
+    expect(p.locator(".rule-preview")).to_contain_text("would change")
+    p.get_by_role("button", name="Apply these changes", exact=True).click()
     lab.finish_jobs()
     lab.close()
     p.reload()
@@ -586,10 +592,19 @@ def test_hostile_search_bad_rules_and_backend_remains_responsive(lab):
     p.locator(".search-trigger").click()
     p.get_by_role("textbox", name="Search articles").fill("")
     lab.manager("Rules")
+    p.get_by_role("button", name="+ Add new rule", exact=True).click()
     form = p.locator(".rule-form")
     form.locator("input[name=name]").fill("Invalid regex")
-    form.locator("input[name=pattern]").fill("[")
-    form.get_by_role("button", name="Add rule", exact=True).click()
-    expect(p.locator(".manager-body .inline-error")).to_be_visible()
+    form.locator("textarea[name=pattern]").fill("[")
+    # The pattern is checked by the engine that runs it, so saving is barred.
+    expect(p.locator(".rule-line-error")).to_contain_text("Line 1")
+    expect(form.get_by_role("button", name="Add rule", exact=True)).to_be_disabled()
+    assert not lab.api("rules")
+    # The server refuses it independently of the browser.
+    response = p.request.post(
+        lab.base + "/api/actions/save_rule",
+        data={"payload": {"name": "Invalid regex", "field": "title", "pattern": "[", "action": "read"}},
+    )
+    assert response.status == 400
     assert not lab.api("rules")
     assert lab.api("overview")["counts"]["total"] == 1

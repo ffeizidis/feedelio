@@ -16,7 +16,7 @@ import statistics
 import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
@@ -97,6 +97,12 @@ DEFAULTS = dict(
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 # Articles are always read through their feed, so deleted feeds hide their articles.
 ARTICLES = "FROM articles a JOIN feeds f ON f.id=a.feed_id"
+# What a rule may look at, what it may do, and the article column each action sets.
+RULE_FIELDS = ("title", "body", "url", "author", "tags")
+RULE_ACTIONS = ("read", "star", "tag", "drop", "rewrite")
+RULE_STATE = {"read": "read", "star": "starred", "drop": "deleted"}
+# A pattern that has not matched within this long is pathological, not slow.
+RULE_TIMEOUT = 0.05
 # A feed with nothing new for this long is reported as stale, not healthy.
 STALE_DAYS = 14
 
@@ -126,6 +132,35 @@ def record(row):
         if result[key] is not None:
             result[key] = json.loads(result[key])
     return result
+
+
+def rule_lines(pattern):
+    """A rule's patterns, one per line, so one rule can list its alternatives."""
+    return [line for line in (raw.strip() for raw in (pattern or "").splitlines()) if line]
+
+
+def compile_rule(pattern, is_regex=True):
+    """Compile every line of a rule once, naming the line that would not compile."""
+    lines = rule_lines(pattern)
+    if not lines:
+        raise ValueError("A rule needs at least one pattern.")
+    compiled = []
+    for number, line in enumerate(lines, 1):
+        try:
+            compiled.append(regex.compile(line if is_regex else regex.escape(line), regex.I))
+        except regex.error as error:
+            raise ValueError(f"Line {number}: {error}") from error
+    return compiled
+
+
+def replacement_error(compiled, value):
+    """Report a rewrite template referring to a group its pattern cannot capture."""
+    for number, name in regex.findall(r"\\(\d+)|\\g<([^>]*)>", value or ""):
+        if number and int(number) > compiled.groups:
+            return f"There is no group {number} to substitute."
+        if name and name not in compiled.groupindex:
+            return f"There is no group named {name!r} to substitute."
+    return None
 
 
 def parse_feed(url, data, headers):
@@ -242,6 +277,13 @@ class Core:
             if "duration" not in {r[1] for r in self.db.execute("PRAGMA table_info(articles)")}:
                 try:  # The API and the worker start together; whoever is second finds it done.
                     self.db.execute("ALTER TABLE articles ADD COLUMN duration INTEGER NOT NULL DEFAULT 0")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):
+                        raise
+            # Rules predating the literal/regex choice were regular expressions.
+            if "is_regex" not in {r[1] for r in self.db.execute("PRAGMA table_info(rules)")}:
+                try:
+                    self.db.execute("ALTER TABLE rules ADD COLUMN is_regex INTEGER NOT NULL DEFAULT 1")
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc):
                         raise
@@ -869,46 +911,131 @@ class Core:
     def rules(self):
         return self.rows("SELECT * FROM rules ORDER BY rowid")
 
-    def save_rule(self, name, field, pattern, action, value="", feed_id=None, enabled=True, id=None):
-        if field not in ("title", "body", "url", "author", "tags") or action not in (
-            "read",
-            "star",
-            "tag",
-            "drop",
-            "rewrite",
-        ):
+    def save_rule(
+        self, name, field, pattern, action, value="", feed_id=None, enabled=True, id=None, is_regex=True
+    ):
+        if field not in RULE_FIELDS or action not in RULE_ACTIONS:
             raise ValueError("Invalid rule field or action.")
-        regex.compile(pattern)
+        compiled = compile_rule(pattern, is_regex)
+        if action == "rewrite":
+            problem = replacement_error(compiled[0], value)
+            if problem:
+                raise ValueError(problem)
+        if action == "tag" and not value.strip():
+            raise ValueError("A tag rule needs a tag.")
         if feed_id:
             self.one("SELECT id FROM feeds WHERE id=?", (feed_id,))
         id = id or uid()
         with self.db:
+            # Named columns, so adding one later cannot shift a positional insert.
+            # The upsert keeps the rowid, and with it the rule's place in the order.
             self.db.execute(
-                """INSERT INTO rules VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                """INSERT INTO rules (id,name,field,pattern,action,value,feed_id,enabled,is_regex)
+                VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,field=excluded.field,pattern=excluded.pattern,action=excluded.action,
-                value=excluded.value,feed_id=excluded.feed_id,enabled=excluded.enabled""",
-                (id, name, field, pattern, action, value, feed_id, int(enabled)),
+                value=excluded.value,feed_id=excluded.feed_id,enabled=excluded.enabled,
+                is_regex=excluded.is_regex""",
+                (id, name, field, pattern, action, value, feed_id, int(enabled), int(is_regex)),
             )
         return {"id": id}
+
+    def validate_rule(self, pattern, is_regex=True, action="read", value="", field="title"):
+        """Compile a draft with the engine that runs it, so the check cannot lie."""
+        lines, problems = rule_lines(pattern), []
+        for number, line in enumerate(lines, 1):
+            try:
+                compiled = regex.compile(line if is_regex else regex.escape(line), regex.I)
+            except regex.error as error:
+                problems.append({"line": number, "pattern": line, "error": str(error)})
+                continue
+            # A pattern still searching a small hostile string will never finish a library.
+            try:
+                compiled.search("a" * 4000 + "!", timeout=RULE_TIMEOUT / 2)
+            except TimeoutError:
+                problems.append({"line": number, "pattern": line, "slow": True})
+        problem = None
+        if action == "rewrite" and lines and not problems:
+            problem = replacement_error(compile_rule(pattern, is_regex)[0], value)
+        if action == "tag" and not (value or "").strip():
+            problem = "A tag rule needs a tag."
+        return {"lines": len(lines), "errors": problems, "value_error": problem}
 
     def delete_rule(self, id):
         with self.db:
             self.db.execute("DELETE FROM rules WHERE id=?", (id,))
         return {"ok": True}
 
-    def apply_rules(self, a):
-        for rule in self.rules():
-            if not rule["enabled"] or rule["feed_id"] not in (None, a["feed_id"]):
+    def matchers(self, rules=None):
+        """Enabled rules with their lines compiled once, in execution order.
+
+        Compiling here rather than per article is what makes a whole-library pass
+        cheap. A rule that no longer compiles is skipped rather than raised: one
+        bad row must not stop every article from being ingested.
+        """
+        ready = []
+        for rule in self.rules() if rules is None else rules:
+            if not rule["enabled"]:
+                continue
+            try:
+                ready.append((rule, compile_rule(rule["pattern"], rule.get("is_regex", 1))))
+            except ValueError:
+                continue
+        return ready
+
+    @staticmethod
+    def apply_matchers(a, matchers):
+        """Run compiled rules over one article, reporting what actually changed.
+
+        Pure: it neither sanitizes nor writes, so a preview and a real pass agree
+        by construction. A rule counts as fired only when it altered the article,
+        which is what lets the preview promise "would change" and not "matches".
+        Returns the columns that changed, the rules that changed them, and any
+        rule whose pattern ran out of time on this article.
+        """
+        changed, fired, slow = set(), [], []
+        for rule, patterns in matchers:
+            if rule["feed_id"] not in (None, a["feed_id"]):
                 continue
             source = str(a.get(rule["field"], ""))
-            if not regex.search(rule["pattern"], source, regex.I, timeout=0.05):
+            try:
+                if not any(p.search(source, timeout=RULE_TIMEOUT) for p in patterns):
+                    continue
+                if rule["action"] == "rewrite":
+                    body = a["body"]
+                    for p in patterns:
+                        body = p.sub(rule["value"], body, timeout=RULE_TIMEOUT)
+            except TimeoutError:
+                # This rule cannot finish on this article. Skip the pair, not the
+                # article: the other rules still have work to do here.
+                slow.append(rule["id"])
                 continue
             if rule["action"] == "rewrite":
-                a["body"] = regex.sub(rule["pattern"], rule["value"], a["body"], flags=regex.I, timeout=0.05)
+                if body == a["body"]:
+                    continue
+                a["body"] = body
+                changed.add("body")
             elif rule["action"] == "tag":
-                a["tags"] = sorted(set(a["tags"] + [rule["value"]]))
+                tags = sorted(set(a["tags"] + [rule["value"]]))
+                if tags == a["tags"]:
+                    continue
+                a["tags"] = tags
+                changed.add("tags")
             else:
-                a[{"read": "read", "star": "starred", "drop": "deleted"}[rule["action"]]] = 1
+                column = RULE_STATE[rule["action"]]
+                if a[column]:
+                    continue
+                a[column] = 1
+                changed.add(column)
+            fired.append(rule["id"])
+        return changed, fired, slow
+
+    def apply_rules(self, a, matchers=None):
+        """Ingest path: run the rules, then re-derive the stored body and text.
+
+        The sanitize belongs to freshly fetched publisher HTML, not to the rules,
+        which is why the stored-article pass below can skip it when no body changed.
+        """
+        self.apply_matchers(a, self.matchers() if matchers is None else matchers)
         a["body"] = sanitize(a["body"], a["url"])
         a["text"] = plain(a["body"])
         a["words"] = len(a["text"].split()) + len(a.get("transcript", "").split())
@@ -1672,7 +1799,7 @@ class Core:
                 self._run_backfill(job)
                 return True
             elif job["kind"] == "rules":
-                result = self.reapply_rules()
+                result = self.reapply_rules(job_id=job["id"])
             else:
                 result = self.purge()
             with self.db:
@@ -1706,18 +1833,75 @@ class Core:
             self.enqueue("refresh", {"feed_id": f["id"]})
         return {"queued": True}
 
-    def reapply_rules(self):
-        count = 0
-        for row in self.rows("SELECT id FROM articles WHERE deleted=0"):
-            with self.db:
-                self.db.execute("BEGIN IMMEDIATE")
-                current = self.rows("SELECT * FROM articles WHERE id=? AND deleted=0", (row["id"],))
-                if not current:
-                    continue
-                a = self.apply_rules(current[0])
-                self._write_article(a, "body text words tags read starred deleted".split())
-            count += 1
-        return {"processed": count}
+    def scan_rules(self, matchers, write, batch=200, job_id=None):
+        """Walk every stored article once, storing the changes only when asked.
+
+        With write=False nothing is written and the tally is identical, so the
+        preview is this same pass without its writes -- the estimate cannot drift
+        from what applying actually does.
+        """
+        totals = dict.fromkeys(RULE_ACTIONS, 0)
+        per_rule = {rule["id"]: 0 for rule, _ in matchers}
+        rules_by_id = {rule["id"]: rule for rule, _ in matchers}
+        scanned = changed_articles = timeouts = 0
+        slow = set()
+        # Deleted articles stay out of reach, as they already are for ingest.
+        ids = [row["id"] for row in self.rows("SELECT id FROM articles WHERE deleted=0")]
+        for start in range(0, len(ids), batch):
+            chunk = ids[start : start + batch]
+            sql = "SELECT * FROM articles WHERE id IN (%s) AND deleted=0" % ",".join("?" for _ in chunk)
+            with ExitStack() as scope:
+                if write:
+                    # R4: read each article's current state inside the transaction
+                    # that writes it, so a concurrent edit cannot be clobbered.
+                    scope.enter_context(self.db)
+                    self.db.execute("BEGIN IMMEDIATE")
+                for a in self.rows(sql, chunk):
+                    scanned += 1
+                    fields, fired, stalled = self.apply_matchers(a, matchers)
+                    if stalled:
+                        timeouts += 1
+                        slow.update(stalled)
+                    if not fields:
+                        continue
+                    changed_articles += 1
+                    for rule_id in fired:
+                        per_rule[rule_id] += 1
+                        totals[rules_by_id[rule_id]["action"]] += 1
+                    if "body" in fields:
+                        # A rewrite value is arbitrary text landing in stored HTML.
+                        a["body"] = sanitize(a["body"], a["url"])
+                        a["text"] = plain(a["body"])
+                        a["words"] = len(a["text"].split()) + len(a.get("transcript", "").split())
+                        fields |= {"text", "words"}
+                    if write:
+                        # Only the columns that moved, so the article_search trigger
+                        # re-indexes a row only when its text really changed.
+                        self._write_article(a, sorted(fields))
+            if job_id:
+                with self.db:
+                    self.db.execute(
+                        "UPDATE jobs SET result=?,updated=? WHERE id=?",
+                        (json.dumps({"processed": scanned, "total": len(ids)}), now(), job_id),
+                    )
+        return {
+            "processed": scanned,
+            "changed": changed_articles,
+            "actions": totals,
+            "rules": [
+                {"id": id, "name": rules_by_id[id]["name"], "changed": count}
+                for id, count in per_rule.items()
+            ],
+            "timeouts": timeouts,
+            "slow": sorted(slow),
+        }
+
+    def reapply_rules(self, job_id=None):
+        return self.scan_rules(self.matchers(), write=True, job_id=job_id)
+
+    def preview_rules(self):
+        """Exactly what applying the stored rules would change, changing nothing."""
+        return self.scan_rules(self.matchers(), write=False)
 
     def import_opml(self, xml):
         root = fromstring(xml)

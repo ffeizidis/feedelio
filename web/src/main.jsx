@@ -52,6 +52,7 @@ import {
   Bookmark,
   Image,
   Loader2,
+  Pencil,
 } from "lucide-react";
 import "./style.css";
 import "@fontsource/italianno/latin-400.css";
@@ -65,6 +66,7 @@ import {
   FolderSheet,
   FolderManager,
   FolderSelect,
+  RulesManager,
   Select,
   folderOptions,
   useSubmit,
@@ -625,9 +627,15 @@ function App() {
     collapsed,
   ]);
   const visibleItems = items;
-  const refresh = () => cache.invalidateQueries();
+  // A write that cannot touch articles says so, and waits only for what it changed.
+  const refresh = (keys) =>
+    keys
+      ? Promise.all(
+          keys.map((key) => cache.invalidateQueries({ queryKey: key })),
+        )
+      : cache.invalidateQueries();
   const notify = (message, error = false) => setToast({ message, error });
-  async function act(name, payload, message) {
+  async function act(name, payload, message, options = {}) {
     setBusy((n) => n + 1);
     try {
       const result = await cmd(name, payload);
@@ -638,7 +646,7 @@ function App() {
       ) {
         setReloadPolicy(true);
       }
-      await refresh();
+      await refresh(options.invalidate);
       if (message) notify(message);
       return result;
     } catch (error) {
@@ -2298,162 +2306,17 @@ function Library({
             />
           )}
           {tab === "rules" && (
-            <>
-              <p className="muted">
-                Rules run on new articles and extracted content, in the order
-                below. Patterns are case-insensitive regular expressions.
-              </p>
-              <div className="rule-presets">
-                <button
-                  onClick={() =>
-                    submit(() =>
-                      act(
-                        "save_rule",
-                        {
-                          id: "shorts",
-                          name: "Skip YouTube Shorts",
-                          field: "url",
-                          pattern: "youtube\\.com/shorts/",
-                          action: "read",
-                        },
-                        "Shorts rule added",
-                      ),
-                    )
-                  }
-                >
-                  + Skip YouTube Shorts
-                </button>
-                <button
-                  onClick={() =>
-                    submit(() =>
-                      act(
-                        "save_rule",
-                        {
-                          id: "paywall",
-                          name: "Skip paywalled articles",
-                          field: "tags",
-                          pattern: "paywall",
-                          action: "read",
-                        },
-                        "Paywall rule added",
-                      ),
-                    )
-                  }
-                >
-                  + Mark paywalls as read
-                </button>
-              </div>
-              {rules.data?.map((r) => (
-                <div className="rule-row" key={r.id}>
-                  <input
-                    aria-label={"Enable " + r.name}
-                    type="checkbox"
-                    checked={!!r.enabled}
-                    onChange={(e) =>
-                      submit(() =>
-                        act("save_rule", { ...r, enabled: e.target.checked }),
-                      )
-                    }
-                  />
-                  <span>
-                    <strong>{r.name}</strong>
-                    <small>
-                      {r.field} matches /{r.pattern}/ → {r.action} {r.value}
-                    </small>
-                  </span>
-                  <IconButton
-                    icon={Trash2}
-                    label={"Delete " + r.name}
-                    onClick={() =>
-                      submit(() => act("delete_rule", { id: r.id }))
-                    }
-                  />
-                </div>
-              ))}
-              <form
-                className="rule-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const form = e.currentTarget,
-                    p = Object.fromEntries(new FormData(form));
-                  p.feed_id = p.feed_id || null;
-                  submit(async () => {
-                    await act("save_rule", p, "Rule added");
-                    form.reset();
-                  });
-                }}
-              >
-                <Field label="Rule name">
-                  <input
-                    name="name"
-                    required
-                    placeholder="Keep the good stuff"
-                  />
-                </Field>
-                <div className="form-grid">
-                  <Field label="Match field">
-                    <Select
-                      name="field"
-                      label="Match field"
-                      defaultValue="title"
-                      options={["title", "body", "url", "author", "tags"].map(
-                        (x) => ({ value: x, label: x }),
-                      )}
-                    />
-                  </Field>
-                  <Field label="Pattern (regex)">
-                    <input
-                      name="pattern"
-                      required
-                      placeholder="subscribe to continue"
-                    />
-                  </Field>
-                  <Field label="Action">
-                    <Select
-                      name="action"
-                      label="Action"
-                      defaultValue="read"
-                      options={["read", "star", "tag", "drop", "rewrite"].map(
-                        (x) => ({ value: x, label: x }),
-                      )}
-                    />
-                  </Field>
-                  <Field label="Tag or replacement">
-                    <input name="value" placeholder="Optional" />
-                  </Field>
-                </div>
-                <Field label="Scope">
-                  <Select
-                    name="feed_id"
-                    label="Scope"
-                    options={[
-                      { value: "", label: "All feeds" },
-                      ...data.feeds.map((f) => ({
-                        value: f.id,
-                        label: f.title,
-                      })),
-                    ]}
-                  />
-                </Field>
-                <div className="form-actions">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      submit(() =>
-                        act(
-                          "enqueue",
-                          { kind: "rules" },
-                          "Rules queued for all stored articles",
-                        ),
-                      )
-                    }
-                  >
-                    Apply rules to existing articles
-                  </button>
-                  <button className="primary">Add rule</button>
-                </div>
-              </form>
-            </>
+            <RulesManager
+              data={data}
+              rules={rules}
+              act={act}
+              api={api}
+              Modal={Modal}
+              Field={Field}
+              IconButton={IconButton}
+              Pencil={Pencil}
+              Trash2={Trash2}
+            />
           )}
           {tab === "data" && (
             <DataSettings data={data} act={act} submit={submit} />

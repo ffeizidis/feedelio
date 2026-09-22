@@ -325,6 +325,20 @@ def test_rules_are_edited_previewed_and_applied(core, site, web_server):
         # One rule, two patterns, either of which fires it.
         form.locator("textarea[name=pattern]").fill("advert\nkeeper")
         expect(page.locator(".rule-line-error")).to_have_count(0)
+
+        # Counted before it is saved, so a pattern can be tried on the real library.
+        form.get_by_role("button", name="Preview this rule", exact=True).click()
+        expect(form.locator(".rule-preview")).to_contain_text("2 of 3 stored articles")
+
+        # A valid pattern that matches nothing says so rather than passing quietly.
+        form.locator("textarea[name=pattern]").fill("^ An advert here ")
+        expect(form.locator(".rule-preview")).to_have_count(0)  # The count was for the old pattern.
+        expect(page.locator(".rule-line-error")).to_have_count(0)
+        form.get_by_role("button", name="Preview this rule", exact=True).click()
+        expect(form.locator(".rule-preview")).to_contain_text("0 of 3 stored articles")
+        expect(form.locator(".rule-line-warning")).to_contain_text("stray spaces")
+
+        form.locator("textarea[name=pattern]").fill("advert\nkeeper")
         form.get_by_role("button", name="Add rule", exact=True).click()
         expect(page.locator(".rule-row")).to_have_count(1)
         expect(page.locator(".rule-form")).to_have_count(0)  # It closes behind itself.
@@ -359,4 +373,55 @@ def test_rules_are_edited_previewed_and_applied(core, site, web_server):
         page.once("dialog", lambda d: d.accept())
         page.get_by_role("button", name="Delete Star keepers", exact=True).click()
         expect(page.locator(".rule-row")).to_have_count(1)
+        browser.close()
+
+
+def test_a_long_dropdown_is_narrowed_by_typing(core, site, web_server):
+    """A rule's scope among many feeds: type to search, rather than hunt."""
+    base, routes, _ = site
+    feed = routes["/rss"]
+    for i in range(11):
+        routes[f"/rss{i}"] = feed
+        core.subscribe(f"{base}/rss{i}", "inbox", f"Journal number {i}")
+    routes["/garden"] = feed
+    core.subscribe(base + "/garden", "inbox", "The Gardening Weekly")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(web_server)
+        page.get_by_role("button", name="Manage library").click()
+        page.get_by_role("button", name="Rules", exact=True).click()
+        page.get_by_role("button", name="+ Add new rule", exact=True).click()
+
+        # A short dropdown is quicker to read than to filter, so it has no field.
+        page.get_by_role("combobox", name="Action").click()
+        expect(page.get_by_role("textbox", name="Search Action")).to_have_count(0)
+        page.keyboard.press("Escape")
+
+        # Twelve feeds is a hunt, so this one opens ready to be typed into.
+        page.get_by_role("combobox", name="Scope").click()
+        search = page.get_by_role("textbox", name="Search Scope")
+        expect(search).to_be_focused()
+        options = page.get_by_role("listbox", name="Scope")
+        expect(options.get_by_role("option")).to_have_count(13)  # All feeds, plus the twelve.
+
+        search.fill("garden")
+        expect(options.get_by_role("option")).to_have_count(1)
+        search.fill("number 1")  # A space belongs to the query, not to picking.
+        expect(options.get_by_role("option")).to_have_count(2)  # 1 and 10.
+        search.fill("nothing here")
+        expect(options.get_by_role("option")).to_have_count(0)
+        expect(page.locator(".select-empty")).to_be_visible()
+
+        # Enter takes the first of what is left, and the choice sticks.
+        search.fill("Gardening")
+        page.keyboard.press("Enter")
+        expect(page.get_by_role("combobox", name="Scope")).to_have_text("The Gardening Weekly")
+        expect(page.get_by_role("listbox", name="Scope")).to_have_count(0)
+
+        # Reopening starts from the whole list again, not the last search.
+        page.get_by_role("combobox", name="Scope").click()
+        expect(page.get_by_role("textbox", name="Search Scope")).to_have_value("")
+        expect(page.get_by_role("listbox", name="Scope").get_by_role("option")).to_have_count(13)
         browser.close()

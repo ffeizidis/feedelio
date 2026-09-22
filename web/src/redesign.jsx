@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 export const feedClass = (feed) => `feed-hue-${feed?.options?.hue ?? 0}`;
@@ -392,6 +398,9 @@ export function AppearanceSettings({ settings: s, pref }) {
 // Every dropdown in the app: a button that opens a listbox which stays open
 // until an option is picked, Escape, or a click elsewhere. Native <select>
 // popups close on mouseup in some browsers and cannot indent nested folders.
+// Below this many options a filter field is noise rather than help.
+const SEARCH_FROM = 8;
+
 export function Select({
   label,
   name,
@@ -405,13 +414,23 @@ export function Select({
     [open, setOpen] = useState(false),
     [cursor, setCursor] = useState(0),
     [place, setPlace] = useState({}),
+    [query, setQuery] = useState(""),
     root = useRef(null),
+    search = useRef(null),
     list = useRef(null);
   const current = value === undefined ? inner : value,
     chosen = options.find((o) => o.value === current);
+  // A handful of choices are quicker to read than to filter; a list of feeds or
+  // folders is not, so past a threshold the menu can be narrowed by typing.
+  const searchable = options.length > SEARCH_FROM;
+  const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!searchable || !needle) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(needle));
+  }, [options, query, searchable]);
   function pick(option) {
     setOpen(false);
-    if (option.disabled) return;
+    if (!option || option.disabled) return;
     setInner(option.value);
     onChange?.(option.value);
   }
@@ -433,6 +452,7 @@ export function Select({
   }, []);
   function show() {
     locate();
+    setQuery("");
     setCursor(Math.max(0, options.indexOf(chosen)));
     setOpen(true);
   }
@@ -466,6 +486,11 @@ export function Select({
   useEffect(() => {
     if (open) reveal(cursor);
   }, [cursor]);
+  useEffect(() => {
+    if (open && searchable) search.current?.focus();
+  }, [open, searchable]);
+  // Narrowing the list moves the cursor back to the top of what is left.
+  useEffect(() => setCursor(0), [query]);
   function key(e) {
     const step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
     if (!open) {
@@ -476,15 +501,17 @@ export function Select({
       return;
     }
     e.stopPropagation();
+    const typing = e.target === search.current;
     if (step) {
       e.preventDefault();
-      setCursor((c) => Math.min(options.length - 1, Math.max(0, c + step)));
-    } else if (e.key === "Home" || e.key === "End") {
+      setCursor((c) => Math.min(shown.length - 1, Math.max(0, c + step)));
+    } else if ((e.key === "Home" || e.key === "End") && !typing) {
       e.preventDefault();
-      setCursor(e.key === "Home" ? 0 : options.length - 1);
-    } else if (e.key === "Enter" || e.key === " ") {
+      setCursor(e.key === "Home" ? 0 : shown.length - 1);
+    } else if (e.key === "Enter" || (e.key === " " && !typing)) {
+      // A space belongs to the query while the filter has focus.
       e.preventDefault();
-      pick(options[cursor]);
+      pick(shown[cursor]);
     } else if (e.key === "Escape" || e.key === "Tab") {
       if (e.key === "Escape") e.preventDefault();
       setOpen(false);
@@ -515,31 +542,46 @@ export function Select({
         </svg>
       </button>
       {open && (
-        <ul
-          role="listbox"
-          aria-label={label}
-          className="select-menu"
-          ref={list}
-          style={place}
-        >
-          {options.map((o, i) => (
-            <li
-              key={o.value}
-              role="option"
-              aria-selected={o.value === current}
-              aria-disabled={o.disabled || undefined}
-              className={i === cursor ? "focused" : ""}
-              style={{ paddingLeft: 12 + (o.depth || 0) * 16 }}
-              onPointerMove={() => setCursor(i)}
-              onClick={(e) => {
-                e.preventDefault(); // a wrapping <label> would re-click the button
-                pick(o);
-              }}
-            >
-              {o.label}
-            </li>
-          ))}
-        </ul>
+        <div className="select-menu" style={place}>
+          {searchable && (
+            <input
+              ref={search}
+              className="select-search"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label={`Search ${label}`}
+              placeholder="Type to search…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          )}
+          <ul
+            role="listbox"
+            aria-label={label}
+            className="select-list"
+            ref={list}
+          >
+            {shown.map((o, i) => (
+              <li
+                key={o.value}
+                role="option"
+                aria-selected={o.value === current}
+                aria-disabled={o.disabled || undefined}
+                className={i === cursor ? "focused" : ""}
+                style={{ paddingLeft: 12 + (o.depth || 0) * 16 }}
+                onPointerMove={() => setCursor(i)}
+                onClick={(e) => {
+                  e.preventDefault(); // a wrapping <label> would re-click the button
+                  pick(o);
+                }}
+              >
+                {o.label}
+              </li>
+            ))}
+          </ul>
+          {shown.length === 0 && <p className="select-empty">No matches</p>}
+        </div>
       )}
     </div>
   );
@@ -874,6 +916,9 @@ function RuleSheet({ data, act, api, rule, onClose, Modal, Field }) {
   const { error, submit, busy } = useSubmit(),
     [form, setForm] = useState({ ...BLANK, ...(rule || {}) }),
     [check, setCheck] = useState(null),
+    [tried, setTried] = useState(null),
+    [trying, setTrying] = useState(false),
+    [triedError, setTriedError] = useState(""),
     request = useRef(0);
   const set = (key) => (v) => setForm((f) => ({ ...f, [key]: v }));
   // Checked by the same engine that runs the rules, so this cannot pass what the
@@ -899,6 +944,34 @@ function RuleSheet({ data, act, api, rule, onClose, Modal, Field }) {
   const broken = (check?.errors || []).filter((e) => e.error),
     slow = (check?.errors || []).filter((e) => e.slow),
     blocked = busy || !form.pattern.trim() || broken.length > 0;
+  // A count belongs to the rule it was counted for, so editing retires it.
+  useEffect(() => {
+    setTried(null);
+    setTriedError("");
+  }, [
+    form.pattern,
+    form.is_regex,
+    form.field,
+    form.action,
+    form.value,
+    form.feed_id,
+  ]);
+  // The same pass that applying uses, over one rule, saved or not.
+  async function tryRule() {
+    setTrying(true);
+    setTriedError("");
+    try {
+      setTried(
+        await api("rules/preview", {
+          payload: { rule: { ...form, feed_id: form.feed_id || null } },
+        }),
+      );
+    } catch (e) {
+      setTriedError(e.message);
+    } finally {
+      setTrying(false);
+    }
+  }
   return (
     <Modal title={rule ? "Edit rule" : "New rule"} onClose={onClose}>
       <form
@@ -1013,13 +1086,56 @@ function RuleSheet({ data, act, api, rule, onClose, Modal, Field }) {
             {error}
           </p>
         )}
+        {tried && (
+          <div className="rule-preview">
+            <p>
+              This rule would change{" "}
+              <strong>{tried.changed.toLocaleString()}</strong> of{" "}
+              {tried.processed.toLocaleString()} stored articles.
+            </p>
+            {tried.changed === 0 && tried.matched > 0 && (
+              <p>
+                It matches {tried.matched.toLocaleString()} of them, which are
+                already in that state — there is nothing left for it to do here.
+                It still applies to new articles.
+              </p>
+            )}
+            {tried.matched === 0 && (
+              <p className="rule-line-warning">
+                Nothing stored matches it. Check the pattern for stray spaces.
+              </p>
+            )}
+            {tried.timeouts > 0 && (
+              <p className="rule-line-warning">
+                {tried.timeouts.toLocaleString()} article
+                {tried.timeouts === 1 ? "" : "s"} took too long to match and
+                would be skipped. Simplify the pattern.
+              </p>
+            )}
+          </div>
+        )}
+        {triedError && (
+          <p role="alert" className="inline-error">
+            {triedError}
+          </p>
+        )}
         <div className="form-actions">
-          <button type="button" onClick={onClose}>
-            Cancel
+          <button
+            type="button"
+            onClick={tryRule}
+            disabled={blocked || trying}
+            title="Count what this rule would change, without changing anything"
+          >
+            {trying ? "Counting…" : "Preview this rule"}
           </button>
-          <button className="primary" disabled={blocked}>
-            {rule ? "Save rule" : "Add rule"}
-          </button>
+          <div className="action-pair">
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="primary" disabled={blocked}>
+              {rule ? "Save rule" : "Add rule"}
+            </button>
+          </div>
         </div>
       </form>
     </Modal>
@@ -1041,7 +1157,9 @@ function RulePreview({ api, act }) {
           type="button"
           disabled={busy}
           onClick={() =>
-            submit(async () => setSeen(await api("rules/preview")))
+            submit(async () =>
+              setSeen(await api("rules/preview", { payload: {} })),
+            )
           }
         >
           {busy ? "Counting…" : "Preview changes"}

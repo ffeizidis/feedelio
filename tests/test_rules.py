@@ -183,3 +183,86 @@ def test_a_backup_without_the_column_still_restores(core, site, tmp_path, monkey
     with Core(root) as restored:
         restored.restore(backup)
         assert restored.rules()[0]["is_regex"] == 1
+
+
+def test_previewing_one_draft_counts_only_it_and_saves_nothing(core, site):
+    library(core, site, ["an advert", "a keeper", "another advert"])
+    core.save_rule("Keep", "title", "keeper", "star")  # Stored, and not asked about.
+    changes = core.db.total_changes
+
+    draft = core.preview_rules({"name": "Ads", "field": "title", "pattern": "advert", "action": "read"})
+
+    assert draft["changed"] == 2
+    assert draft["actions"] == {"read": 2, "star": 0, "tag": 0, "drop": 0, "rewrite": 0}
+    assert [r["name"] for r in draft["rules"]] == ["Ads"]
+    assert core.db.total_changes == changes  # Nothing written, and nothing saved.
+    assert [r["name"] for r in core.rules()] == ["Keep"]
+
+
+def test_a_drafts_count_is_what_saving_and_applying_then_does(core, site):
+    library(core, site, ["an advert", "a keeper", "another advert"])
+    draft = {"name": "Ads", "field": "title", "pattern": "advert", "action": "read"}
+
+    predicted = core.preview_rules(draft)["changed"]
+    core.save_rule(**draft)
+    assert core.reapply_rules()["changed"] == predicted == 2
+
+
+def test_a_draft_scoped_to_a_feed_ignores_the_rest_of_the_library(core, site):
+    mine, _ = library(core, site, ["an advert"])
+    theirs = core.subscribe(site[0] + "/other")["id"]
+    core.ingest(theirs, "x", "an advert elsewhere", site[0] + "/x", "<p>Body.</p>")
+
+    everywhere = {"name": "Ads", "field": "title", "pattern": "advert", "action": "read"}
+    assert core.preview_rules(everywhere)["changed"] == 2
+    assert core.preview_rules({**everywhere, "feed_id": mine})["changed"] == 1
+
+
+def test_a_disabled_rule_can_still_be_asked_what_it_would_do(core, site):
+    library(core, site, ["an advert", "a keeper"])
+    core.save_rule("Ads", "title", "advert", "read", enabled=False)
+    stored = core.rules()[0]
+
+    assert core.preview_rules()["changed"] == 0  # Disabled: the real pass skips it.
+    assert core.preview_rules(dict(stored))["changed"] == 1
+
+
+def test_previewing_a_draft_rejects_what_saving_would_reject(core, site):
+    library(core, site, ["anything"])
+    with pytest.raises(ValueError, match="Line 2"):
+        core.preview_rules({"name": "Bad", "field": "title", "pattern": "fine\n[", "action": "read"})
+    with pytest.raises(ValueError, match="at least one pattern"):
+        core.preview_rules({"name": "Empty", "field": "title", "pattern": "  ", "action": "read"})
+    with pytest.raises(ValueError):
+        core.preview_rules(
+            {"name": "Bad", "field": "body", "pattern": "x", "action": "rewrite", "value": r"\1"}
+        )
+    with pytest.raises(ValueError, match="Invalid rule"):
+        core.preview_rules({"name": "Bad", "field": "nonsense", "pattern": "x", "action": "read"})
+
+
+def test_a_valid_pattern_that_matches_nothing_is_visible_before_saving(core, site):
+    """The stray spaces that made a live rule silently match nothing."""
+    library(core, site, ["Monthly Roundup #46: September 2026", "Something else"])
+    draft = {"name": "Monthly Roundup", "field": "title", "action": "read"}
+
+    # Valid regex, so validation passes it; only a count reveals the spaces.
+    assert core.validate_rule("^ Monthly Roundup # .+")["errors"] == []
+    assert core.preview_rules({**draft, "pattern": "^ Monthly Roundup # .+"})["changed"] == 0
+    assert core.preview_rules({**draft, "pattern": "^Monthly Roundup #.+"})["changed"] == 1
+    assert core.preview_rules({**draft, "pattern": "Monthly Roundup #", "is_regex": False})["changed"] == 1
+
+
+def test_a_rule_that_matches_but_changes_nothing_says_so(core, site):
+    """Already read is not the same as never matched, and the count must not conflate them."""
+    _, ids = library(core, site, ["an advert", "a keeper"])
+    core.change_articles([ids[0]], read=True)  # The work this rule would do is already done.
+    draft = {"name": "Ads", "field": "title", "pattern": "advert", "action": "read"}
+
+    seen = core.preview_rules(draft)
+    assert seen["changed"] == 0 and seen["matched"] == 1
+    assert seen["rules"] == [{"id": "draft", "name": "Ads", "changed": 0, "matched": 1}]
+
+    # A pattern that genuinely matches nothing is a different answer entirely.
+    missed = core.preview_rules({**draft, "pattern": "^ advert "})
+    assert missed["changed"] == 0 and missed["matched"] == 0

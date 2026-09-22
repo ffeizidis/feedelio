@@ -989,10 +989,12 @@ class Core:
         Pure: it neither sanitizes nor writes, so a preview and a real pass agree
         by construction. A rule counts as fired only when it altered the article,
         which is what lets the preview promise "would change" and not "matches".
-        Returns the columns that changed, the rules that changed them, and any
-        rule whose pattern ran out of time on this article.
+        The two are reported separately, because a rule that matches while
+        changing nothing is already done, not misspelt.
+        Returns the columns that changed, the rules that changed them, the rules
+        whose pattern hit at all, and any that ran out of time on this article.
         """
-        changed, fired, slow = set(), [], []
+        changed, fired, matched, slow = set(), [], [], []
         for rule, patterns in matchers:
             if rule["feed_id"] not in (None, a["feed_id"]):
                 continue
@@ -1009,6 +1011,7 @@ class Core:
                 # article: the other rules still have work to do here.
                 slow.append(rule["id"])
                 continue
+            matched.append(rule["id"])
             if rule["action"] == "rewrite":
                 if body == a["body"]:
                     continue
@@ -1027,7 +1030,7 @@ class Core:
                 a[column] = 1
                 changed.add(column)
             fired.append(rule["id"])
-        return changed, fired, slow
+        return changed, fired, matched, slow
 
     def apply_rules(self, a, matchers=None):
         """Ingest path: run the rules, then re-derive the stored body and text.
@@ -1842,8 +1845,9 @@ class Core:
         """
         totals = dict.fromkeys(RULE_ACTIONS, 0)
         per_rule = {rule["id"]: 0 for rule, _ in matchers}
+        per_rule_matched = {rule["id"]: 0 for rule, _ in matchers}
         rules_by_id = {rule["id"]: rule for rule, _ in matchers}
-        scanned = changed_articles = timeouts = 0
+        scanned = changed_articles = matched_articles = timeouts = 0
         slow = set()
         # Deleted articles stay out of reach, as they already are for ingest.
         ids = [row["id"] for row in self.rows("SELECT id FROM articles WHERE deleted=0")]
@@ -1858,10 +1862,14 @@ class Core:
                     self.db.execute("BEGIN IMMEDIATE")
                 for a in self.rows(sql, chunk):
                     scanned += 1
-                    fields, fired, stalled = self.apply_matchers(a, matchers)
+                    fields, fired, hit, stalled = self.apply_matchers(a, matchers)
                     if stalled:
                         timeouts += 1
                         slow.update(stalled)
+                    if hit:
+                        matched_articles += 1
+                        for rule_id in hit:
+                            per_rule_matched[rule_id] += 1
                     if not fields:
                         continue
                     changed_articles += 1
@@ -1887,9 +1895,18 @@ class Core:
         return {
             "processed": scanned,
             "changed": changed_articles,
+            # A rule can match without changing anything, when the article is
+            # already read, starred or tagged. Telling those apart is what keeps
+            # "nothing would change" from reading as "your pattern is wrong".
+            "matched": matched_articles,
             "actions": totals,
             "rules": [
-                {"id": id, "name": rules_by_id[id]["name"], "changed": count}
+                {
+                    "id": id,
+                    "name": rules_by_id[id]["name"],
+                    "changed": count,
+                    "matched": per_rule_matched[id],
+                }
                 for id, count in per_rule.items()
             ],
             "timeouts": timeouts,
@@ -1899,9 +1916,35 @@ class Core:
     def reapply_rules(self, job_id=None):
         return self.scan_rules(self.matchers(), write=True, job_id=job_id)
 
-    def preview_rules(self):
-        """Exactly what applying the stored rules would change, changing nothing."""
-        return self.scan_rules(self.matchers(), write=False)
+    def preview_rules(self, rule=None):
+        """Exactly what applying would change, changing nothing.
+
+        Given one rule -- stored, or still a draft in the editor -- only that rule
+        is scanned, so a pattern can be tried before it is saved. Either way it is
+        the same pass as applying, so the count cannot drift from what applying does.
+        """
+        if rule is None:
+            return self.scan_rules(self.matchers(), write=False)
+        draft = {
+            "id": rule.get("id") or "draft",
+            "name": rule.get("name") or "This rule",
+            "field": rule.get("field") or "title",
+            "pattern": rule.get("pattern") or "",
+            "action": rule.get("action") or "read",
+            "value": rule.get("value") or "",
+            "feed_id": rule.get("feed_id") or None,
+            # Asking what a disabled rule would do is the point of asking.
+            "enabled": 1,
+            "is_regex": int(bool(rule.get("is_regex", True))),
+        }
+        if draft["field"] not in RULE_FIELDS or draft["action"] not in RULE_ACTIONS:
+            raise ValueError("Invalid rule field or action.")
+        compiled = compile_rule(draft["pattern"], draft["is_regex"])
+        if draft["action"] == "rewrite":
+            problem = replacement_error(compiled[0], draft["value"])
+            if problem:
+                raise ValueError(problem)
+        return self.scan_rules([(draft, compiled)], write=False)
 
     def import_opml(self, xml):
         root = fromstring(xml)

@@ -91,7 +91,9 @@ def test_retry_after_and_initial_failure_can_resume(core, site, header):
     result = run(core, job)
     assert result["status"] == "queued"
     assert result["result"]["attempts"] == 1
-    wait = (datetime.fromisoformat(result["result"]["not_before"]) - datetime.now(timezone.utc)).total_seconds()
+    wait = (
+        datetime.fromisoformat(result["result"]["not_before"]) - datetime.now(timezone.utc)
+    ).total_seconds()
     assert 590 < wait <= 86400  # A far-future Retry-After is capped at a day.
     core.tick()
     assert len(requests) == 1
@@ -362,32 +364,79 @@ def test_youtube_channel_archive_lists_the_video_grid_and_reads_watch_pages(core
     feed, job = prepare(core, site)
     with core.db:  # The live feed is YouTube's, which stops at the newest 15 videos.
         core.db.execute(
-            "UPDATE feeds SET url='https://www.youtube.com/feeds/videos.xml?channel_id=UCtest' WHERE id=?", (feed,)
+            "UPDATE feeds SET url='https://www.youtube.com/feeds/videos.xml?channel_id=UCtest' WHERE id=?",
+            (feed,),
         )
     core.ingest(feed, "yt:video:known000000", "Already here", "https://www.youtube.com/watch?v=known000000")
 
     def grid(id, title):
-        return {"richItemRenderer": {"content": {"lockupViewModel": {
-            "contentId": id, "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
-            "metadata": {"lockupMetadataViewModel": {"title": {"content": title}}},
-        }}}}
+        return {
+            "richItemRenderer": {
+                "content": {
+                    "lockupViewModel": {
+                        "contentId": id,
+                        "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+                        "metadata": {"lockupMetadataViewModel": {"title": {"content": title}}},
+                    }
+                }
+            }
+        }
 
     def continuation(token):
-        return {"continuationItemRenderer": {"continuationEndpoint": {"continuationCommand": {"token": token}}}}
+        return {
+            "continuationItemRenderer": {"continuationEndpoint": {"continuationCommand": {"token": token}}}
+        }
 
-    page = {"contents": {"tabs": [{"richGridRenderer": {"contents": [
-        grid("known000000", "Already here"), grid("newer000000", "The newer one"), continuation("tok1"),
-    ]}}]}}
-    more = {"onResponseReceivedActions": [{"appendContinuationItemsAction": {"continuationItems": [
-        {"richItemRenderer": {"content": {"videoRenderer": {"videoId": "older000000", "title": {"runs": [{"text": "The older one"}]}}}}},
-    ]}}]}
+    page = {
+        "contents": {
+            "tabs": [
+                {
+                    "richGridRenderer": {
+                        "contents": [
+                            grid("known000000", "Already here"),
+                            grid("newer000000", "The newer one"),
+                            continuation("tok1"),
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+    more = {
+        "onResponseReceivedActions": [
+            {
+                "appendContinuationItemsAction": {
+                    "continuationItems": [
+                        {
+                            "richItemRenderer": {
+                                "content": {
+                                    "videoRenderer": {
+                                        "videoId": "older000000",
+                                        "title": {"runs": [{"text": "The older one"}]},
+                                    }
+                                }
+                            }
+                        },
+                    ]
+                }
+            }
+        ]
+    }
     requests = []
 
     def fetch(self, url, options, json=None, headers=None):
         requests.append((url, json))
         if json is None:
-            assert url == "https://www.youtube.com/channel/UCtest/videos" and headers == {"Cookie": "SOCS=CAI"}
-            return b"<html><script>var ytInitialData = " + module.json.dumps(page).encode() + b";</script></html>", url, {}
+            assert url == "https://www.youtube.com/channel/UCtest/videos" and headers == {
+                "Cookie": "SOCS=CAI"
+            }
+            return (
+                b"<html><script>var ytInitialData = "
+                + module.json.dumps(page).encode()
+                + b";</script></html>",
+                url,
+                {},
+            )
         assert url == archives.YOUTUBE_BROWSE and json["continuation"] == "tok1"
         return module.json.dumps(more).encode(), url, {}
 
@@ -417,7 +466,11 @@ def test_youtube_channel_archive_lists_the_video_grid_and_reads_watch_pages(core
     assert set(titles) == {"Already here", "Title of newer000000", "Title of older000000"}
     older = core.article(titles["Title of older000000"]["id"])
     assert older["url"] == "https://www.youtube.com/shorts/older000000" and older["tags"] == ["short"]
-    assert older["published"].startswith("2021-03-04") and older["duration"] == 90 and older["author"] == "Channel"
+    assert (
+        older["published"].startswith("2021-03-04")
+        and older["duration"] == 90
+        and older["author"] == "Channel"
+    )
     assert '<a href="https://example.test/"' in older["body"] and "<p>Line two</p>" in older["body"]
     assert states[-1]["result"]["articles"] == 2
     assert states[-1]["result"]["message"] == "All exposed archive pages processed."

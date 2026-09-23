@@ -910,11 +910,75 @@ const BLANK = {
   is_regex: true,
 };
 
+const REGEX_SYNTAX = [
+  [".", "any character"],
+  ["\\d  \\w  \\s", "digit, word character, space"],
+  ["\\b", "word boundary: \\bcat\\b skips “category”"],
+  ["* + ?", "0 or more, 1 or more, optional"],
+  ["{2,4}", "between 2 and 4 times"],
+  ["^  $", "start, end of the text"],
+  ["a|b", "either a or b"],
+  ["[abc]  [^abc]", "one of, none of these characters"],
+  ["( … )", "group; \\1 reuses it in a replacement"],
+  ["\\.  \\(  \\?", "a literal . ( or ?"],
+];
+
+// A cheat sheet on hover or focus, since most rules need only a few of these.
+// Fixed and placed from the icon, so the dialog's scroll box cannot clip it.
+function RegexHelp() {
+  const [at, setAt] = useState(null);
+  const show = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setAt({ left: Math.max(8, r.left - 8), top: r.bottom + 8 });
+  };
+  return (
+    <span
+      className="regex-help"
+      tabIndex={0}
+      aria-describedby="regex-syntax"
+      onMouseEnter={show}
+      onFocus={show}
+      onMouseLeave={() => setAt(null)}
+      onBlur={() => setAt(null)}
+    >
+      ?
+      <span
+        className="regex-syntax"
+        id="regex-syntax"
+        role="tooltip"
+        hidden={!at}
+        style={at || undefined}
+      >
+        <strong>Regex syntax</strong>
+        <span className="regex-syntax-grid">
+          {REGEX_SYNTAX.map(([code, meaning]) => (
+            <React.Fragment key={code}>
+              <code>{code}</code>
+              <span>{meaning}</span>
+            </React.Fragment>
+          ))}
+        </span>
+        <small>Case is always ignored.</small>
+      </span>
+    </span>
+  );
+}
+
 // The add/edit sheet. A Modal rather than fields revealed in place, so closing it
 // unmounts the dropdowns and the next rule genuinely starts from the defaults.
-function RuleSheet({ data, act, api, rule, onClose, Modal, Field }) {
+// A draft prefills a new rule without making it an edit.
+export function RuleSheet({
+  data,
+  act,
+  api,
+  rule,
+  draft,
+  onClose,
+  Modal,
+  Field,
+}) {
   const { error, submit, busy } = useSubmit(),
-    [form, setForm] = useState({ ...BLANK, ...(rule || {}) }),
+    [form, setForm] = useState({ ...BLANK, ...(draft || {}), ...(rule || {}) }),
     [check, setCheck] = useState(null),
     [tried, setTried] = useState(null),
     [trying, setTrying] = useState(false),
@@ -1017,7 +1081,15 @@ function RuleSheet({ data, act, api, rule, onClose, Modal, Field }) {
           </Field>
         </div>
         <Field
-          label={form.is_regex ? "Patterns (regex)" : "Patterns (plain text)"}
+          label={
+            form.is_regex ? (
+              <>
+                Patterns (regex) <RegexHelp />
+              </>
+            ) : (
+              "Patterns (plain text)"
+            )
+          }
           hint={
             form.is_regex
               ? "One per line — the rule runs if any line matches."

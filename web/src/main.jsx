@@ -53,6 +53,7 @@ import {
   Image,
   Loader2,
   Pencil,
+  Filter,
 } from "lucide-react";
 import "./style.css";
 import "@fontsource/italianno/latin-400.css";
@@ -67,6 +68,7 @@ import {
   FolderManager,
   FolderSelect,
   RulesManager,
+  RuleSheet,
   Select,
   folderOptions,
   useSubmit,
@@ -1502,6 +1504,11 @@ function App() {
                           unstar: "Unsave article",
                         }}
                       />
+                      <IconButton
+                        icon={Filter}
+                        label="Add a filter like this article"
+                        onClick={() => setModal("filter")}
+                      />
                     </span>
                   </div>
                   <hr className="reader-rule" />
@@ -1677,6 +1684,24 @@ function App() {
         <FolderSheet
           data={data}
           act={act}
+          onClose={() => setModal(null)}
+          Modal={Modal}
+          Field={Field}
+        />
+      )}
+      {modal === "filter" && a && (
+        <RuleSheet
+          data={data}
+          act={act}
+          api={api}
+          draft={{
+            name: a.title,
+            field: "title",
+            pattern: a.title,
+            is_regex: false,
+            action: "read",
+            feed_id: a.feed_id,
+          }}
           onClose={() => setModal(null)}
           Modal={Modal}
           Field={Field}

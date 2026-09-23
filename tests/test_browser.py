@@ -316,6 +316,15 @@ def test_rules_are_edited_previewed_and_applied(core, site, web_server):
         form = page.locator(".rule-form")
         expect(form).to_be_visible()
 
+        # Regex syntax is a hover away, and only while the pattern is a regex.
+        help = form.locator(".regex-help")
+        expect(page.get_by_role("tooltip")).to_be_hidden()
+        help.hover()
+        expect(page.get_by_role("tooltip")).to_contain_text("word boundary")
+        form.get_by_role("switch", name="Regular expression").click()
+        expect(help).to_have_count(0)
+        form.get_by_role("switch", name="Regular expression").click()
+
         # A pattern the engine cannot compile is refused before it can be saved.
         form.locator("input[name=name]").fill("Skip adverts")
         form.locator("textarea[name=pattern]").fill("[")
@@ -530,3 +539,36 @@ def test_buttons_that_sit_together_share_one_height(core, web_server):
         }
         assert heights == {32}, heights
         browser.close()
+
+
+def test_an_article_starts_a_filter_filled_in_from_itself(core, site, web_server):
+    """The reader's filter button opens a new rule already aimed at this
+    article's title and feed, marking matches read, and saving adds it."""
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "The Sunday Journal")["id"]
+    core.ingest(feed, "one", "Sponsored: win a (free) trip?", base + "/one", "<p>Body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(web_server)
+        page.locator(".article-row .row-title").first.click()
+        page.get_by_role("button", name="Add a filter like this article").click()
+
+        form = page.locator(".rule-form")
+        expect(form.locator("input[name=name]")).to_have_value("Sponsored: win a (free) trip?")
+        # Matched literally, so the title's brackets and question mark are just text.
+        expect(form.locator("textarea[name=pattern]")).to_have_value("Sponsored: win a (free) trip?")
+        expect(form.get_by_role("switch", name="Regular expression")).not_to_be_checked()
+        expect(page.get_by_role("combobox", name="Match field")).to_contain_text("title")
+        expect(page.get_by_role("combobox", name="Action")).to_contain_text("read")
+        expect(page.get_by_role("combobox", name="Scope")).to_contain_text("The Sunday Journal")
+
+        form.get_by_role("button", name="Add rule", exact=True).click()
+        expect(form).to_have_count(0)
+        browser.close()
+
+    [rule] = core.rules()
+    assert rule["field"] == "title" and rule["action"] == "read"
+    assert rule["feed_id"] == feed and not rule["is_regex"]
+    assert rule["pattern"] == "Sponsored: win a (free) trip?"

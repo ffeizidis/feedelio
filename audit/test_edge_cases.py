@@ -94,7 +94,11 @@ def test_quiet_feed_detection_in_browser(lab):
     lab.show()
     lab.manager("Subscriptions")
     expect(lab.page.locator(".feed-updated.stale")).to_contain_text("stale")
-    expect(lab.page.locator(".feed-issue")).to_have_attribute("title", "No new items in two weeks or more")
+    # The reason rides on the Updated cell itself; only failures add a badge.
+    expect(lab.page.locator(".feed-updated.stale")).to_have_attribute(
+        "title", "No new items in two weeks or more"
+    )
+    expect(lab.page.locator(".feed-issue")).to_have_count(0)
 
 
 @pytest.mark.features(8, 13, 20)

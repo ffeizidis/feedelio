@@ -461,3 +461,72 @@ def test_a_clipped_title_shows_in_full_on_hover(core, site, web_server):
         fits.hover()
         expect(fits).not_to_have_attribute("title", re.compile(r".*"))
         browser.close()
+
+
+def test_the_reader_keeps_a_readable_measure_and_rows_keep_real_targets(core, site, web_server):
+    """A saved wide list no longer squeezes the reader to a sliver, the row
+    and reader controls are large enough to hit, and an unsaved star stays
+    out of the way until the row is pointed at."""
+    base, _, _ = site
+    folder = core.save_folder("Essays")["id"]
+    feed = core.subscribe(base + "/rss", folder, "The Sunday Journal")["id"]
+    core.refresh(feed)
+    body = "<p>" + "A sentence long enough to fill a line of the reading column. " * 40 + "</p>"
+    core.ingest(feed, "one", "The first essay", base + "/one", body)
+    core.ingest(feed, "two", "The second essay", base + "/two", body)
+    # The widths a user had dragged to before, with a large reading size.
+    core.save_settings({"sidebar_width": 281, "list_width": 771, "font_size": 22, "width": 75})
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        page.goto(web_server)
+        row = page.locator(".article-row").filter(has_text="The first essay")
+        expect(row).to_be_visible()
+
+        reader = page.locator(".reader-pane").bounding_box()
+        assert reader["width"] >= round(1400 * 0.36)
+
+        star = row.locator(".star-toggle")
+        page.mouse.move(700, 880)
+        expect(star).to_have_css("opacity", "0")
+        row.hover()
+        expect(star).to_have_css("opacity", "1")
+        for button in row.locator("button.read-toggle, button.star-toggle").all():
+            box = button.bounding_box()
+            assert box["width"] >= 24 and box["height"] >= 32
+
+        row.locator(".row-title").click()
+        prose = page.locator(".prose")
+        expect(prose).to_be_visible()
+        # Width in half-em units, a conservative count of characters per line:
+        # the old layout gave this reader 264px at 22px, about 24.
+        chars = prose.evaluate(
+            "e => e.getBoundingClientRect().width / (parseFloat(getComputedStyle(e).fontSize) * 0.5)"
+        )
+        assert chars >= 36, chars
+        for button in page.locator(".reader-meta button").all():
+            box = button.bounding_box()
+            assert box["width"] >= 24 and box["height"] >= 32
+
+        # A saved star is always shown, not only on hover.
+        page.locator(".reader-meta .star-toggle").click()
+        page.mouse.move(700, 880)
+        expect(row.locator(".star-toggle.starred")).to_have_css("opacity", "1")
+        browser.close()
+
+
+def test_buttons_that_sit_together_share_one_height(core, web_server):
+    """The library's action rows used to mix three button heights side by side."""
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1400, "height": 900})
+        page.goto(web_server)
+        page.get_by_role("button", name="Manage library").click()
+        page.get_by_role("button", name="Import & export", exact=True).click()
+        heights = {
+            round(b.bounding_box()["height"])
+            for b in page.locator(".data-export-row .button, .data-export-row .file-button").all()
+        }
+        assert heights == {32}, heights
+        browser.close()

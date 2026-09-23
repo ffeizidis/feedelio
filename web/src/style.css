@@ -873,9 +873,9 @@ dialog::backdrop {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: var(--control);
+  min-height: var(--control-lg);
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
 }
 .stream-meta {
   flex-wrap: wrap;
@@ -893,17 +893,33 @@ dialog::backdrop {
 }
 .stream-meta .switch-control {
   margin: 0 var(--space-2);
+  font-size: var(--text-md);
+}
+.stream-meta .switch-track {
+  width: 36px;
+  height: 20px;
+}
+.stream-meta .switch-track::after {
+  width: 16px;
+  height: 16px;
+}
+.stream-meta .switch-control[aria-checked="true"] .switch-track::after {
+  left: 18px;
 }
 .stream-meta .icon-button {
-  width: var(--control);
-  height: var(--control);
+  width: var(--control-lg);
+  height: var(--control-lg);
   padding: 0;
 }
+.stream-meta .icon-button svg {
+  width: 20px;
+  height: 20px;
+}
 .update-now {
-  height: var(--control-sm);
-  gap: 6px;
+  height: var(--control);
+  gap: var(--space-2);
   padding: 0 var(--space-3);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   color: var(--muted);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-pill);
@@ -919,10 +935,10 @@ dialog::backdrop {
   cursor: default;
 }
 .sort-toggle {
-  height: var(--control-sm);
-  gap: 6px;
+  height: var(--control);
+  gap: var(--space-2);
   padding: 0 var(--space-2);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1003,7 +1019,7 @@ dialog::backdrop {
 }
 .article-row {
   display: grid;
-  grid-template-columns: auto minmax(72px, 0.32fr) minmax(0, 1fr) 44px;
+  grid-template-columns: auto minmax(80px, 0.32fr) minmax(0, 1fr) 48px;
   column-gap: var(--space-3);
   align-items: center;
   height: 38px;
@@ -1030,7 +1046,7 @@ dialog::backdrop {
 /* The glyphs stay small; the targets around them do not. */
 .read-toggle,
 .star-toggle {
-  width: 28px;
+  width: 32px;
   height: 32px;
   padding: 0;
   flex-shrink: 0;
@@ -1042,8 +1058,8 @@ dialog::backdrop {
   color: var(--ink);
 }
 .read-circle {
-  width: 11px;
-  height: 11px;
+  width: 14px;
+  height: 14px;
   border: 1.5px solid currentColor;
   border-radius: 50%;
   display: inline-block;
@@ -1052,7 +1068,7 @@ dialog::backdrop {
   background: currentColor;
 }
 .star-toggle {
-  font-size: var(--text-lg);
+  font-size: 20px;
   line-height: 1;
 }
 .star-toggle.starred {
@@ -1071,7 +1087,7 @@ dialog::backdrop {
 }
 .row-feed {
   color: var(--feed-color, var(--accent));
-  font: 500 var(--text-sm) / 1.2 var(--sans);
+  font: 500 var(--text-md) / 1.2 var(--sans);
   display: block;
   padding: 0;
   text-align: left;
@@ -1088,7 +1104,7 @@ dialog::backdrop {
   text-align: left;
   padding: 0 var(--space-3) 0 0;
   color: var(--ink);
-  font: 600 var(--text-lg) / 1.2 var(--serif);
+  font: 600 18px / 1.2 var(--serif);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1116,7 +1132,7 @@ dialog::backdrop {
   stroke-width: 2.25;
 }
 .row-date {
-  font: var(--text-xs) / 1 var(--mono);
+  font: var(--text-base) / 1 var(--mono);
   color: var(--dim);
   text-align: right;
   white-space: nowrap;
@@ -1284,7 +1300,11 @@ dialog::backdrop {
   gap: var(--space-2);
   margin-top: var(--space-4);
   color: var(--feed-color, var(--accent));
-  font: 500 var(--text-sm) / 1.3 var(--sans);
+  font: 500 var(--text-md) / 1.3 var(--sans);
+}
+.article-kicker .hue-dot {
+  width: 10px;
+  height: 10px;
 }
 .article-kicker button {
   padding: 0;
@@ -1310,14 +1330,26 @@ dialog::backdrop {
   gap: var(--space-4);
   margin-top: var(--space-1);
   color: var(--dim);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
 }
 .reader-meta-actions {
   display: flex;
   margin-right: -8px;
 }
+.reader-meta .read-toggle,
+.reader-meta .star-toggle {
+  width: 36px;
+  height: 36px;
+}
+.reader-meta .read-circle {
+  width: 16px;
+  height: 16px;
+}
+.reader-meta .star-toggle {
+  font-size: 22px;
+}
 .article-details {
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   line-height: 1.4;
   color: var(--dim);
 }

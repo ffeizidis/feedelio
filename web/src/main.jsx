@@ -286,9 +286,9 @@ function ArticleMarks({ item }) {
   if (!video && !paywall) return null;
   return (
     <span className="row-marks">
-      {video && short && <Smartphone size={12} aria-label="YouTube Short" />}
-      {video && !short && <Video size={12} aria-label="Video" />}
-      {paywall && <Lock size={12} aria-label="Paywalled" />}
+      {video && short && <Smartphone size={15} aria-label="YouTube Short" />}
+      {video && !short && <Video size={15} aria-label="Video" />}
+      {paywall && <Lock size={15} aria-label="Paywalled" />}
     </span>
   );
 }
@@ -376,7 +376,7 @@ function UpdateNow({ data, act, feedId, checked }) {
       title={checked ? "Last checked " + ago(checked) + " ago" : undefined}
       onClick={() => act(...refreshJob(feedId))}
     >
-      <RefreshCw size={14} className={pending ? "spin" : ""} />
+      <RefreshCw size={16} className={pending ? "spin" : ""} />
       {pending ? "Updating…" : "Update now"}
     </button>
   );
@@ -1219,7 +1219,7 @@ function App() {
                   pref("sort", settings.sort === "oldest" ? "newest" : "oldest")
                 }
               >
-                <ArrowUpDown size={14} />
+                <ArrowUpDown size={16} />
                 {settings.sort === "oldest" ? "Oldest first" : "Newest first"}
               </button>
               {activeFeed && (

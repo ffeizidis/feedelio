@@ -94,7 +94,12 @@ def test_three_panes_geometry_and_independent_targets(lab, width):
     seed(lab)
     panes = [p.locator(s).bounding_box() for s in (".sidebar", ".stream-pane", ".reader-pane")]
     assert all(b["y"] == 0 and b["height"] == 900 for b in panes)
-    assert panes[0]["width"] == 252 and panes[1]["width"] == 590
+    # The list keeps its 590px default until the reader would drop below its
+    # minimum (36% of the window, 380-560px); then the list gives way.
+    reader_min = round(min(560, max(380, width * 0.36)))
+    assert panes[0]["width"] == 252
+    assert panes[1]["width"] == min(590, width - 252 - reader_min)
+    assert panes[2]["width"] >= reader_min
     assert panes[1]["x"] == panes[0]["width"]
     assert panes[2]["x"] == panes[0]["width"] + panes[1]["width"]
     assert panes[2]["x"] + panes[2]["width"] == width
@@ -116,15 +121,20 @@ def test_three_panes_geometry_and_independent_targets(lab, width):
     p.locator(".article-list").hover()
     p.mouse.wheel(0, 400)
     lab.until(lambda: p.locator(".article-list").evaluate("e=>e.scrollTop") > 100)
-    for name, setting in [("Resize feeds pane", "sidebar_width"), ("Resize article list", "list_width")]:
+    # The list is drawn narrower: where the window is small it already sits at
+    # its widest, since the reader keeps its minimum and the list gives way.
+    for name, setting, dx in [
+        ("Resize feeds pane", "sidebar_width", 30),
+        ("Resize article list", "list_width", -30),
+    ]:
         handle = p.get_by_role("separator", name=name)
         box = handle.bounding_box()
         before = float(handle.get_attribute("aria-valuenow"))
         p.mouse.move(box["x"] + 4, 220)
         p.mouse.down()
-        p.mouse.move(box["x"] + 34, 220)
+        p.mouse.move(box["x"] + 4 + dx, 220)
         p.mouse.up()
-        lab.until(lambda: lab.api("overview")["settings"][setting] > before)
+        lab.until(lambda: (lab.api("overview")["settings"][setting] - before) * dx > 0)
     p.keyboard.press("3")
     expect(p.locator(".article-list")).to_have_class(re.compile(r"\bcompact\b"))
     p.reload()

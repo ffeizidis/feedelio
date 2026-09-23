@@ -54,3 +54,11 @@ The web-typography skill informed local font loading, fallback stacks, minimum c
 - Left sidebar sizes increased: primary navigation 18px, feeds 17px, folders/search/manage 16px, counts 14px and section heading 13px. Row heights increased where needed. Typography diagnostic remains 10/10 for the tested default configuration, with no failing rows.
 - The favicon now uses the actual Italianno lowercase-f outline, with its existing SIL OFL notice. It is self-contained SVG with a versioned link to refresh cached tab icons.
 - The deployed app passed the live six-width check with no JavaScript errors. Test-only issues found during verification were corrected: feed scope is not restored on reload without an open article, and Playwright's wait callback must be a function under the production CSP.
+
+## Balance pass (2026-09-23)
+
+- The reader keeps a minimum of 36% of the window (380–560px). Saved sidebar and list widths are kept but rendered clamped, and the list gives way first. A wide saved list had left a 264px reading column, about 25 characters a line.
+- `tokens.css` now holds the whole scale: type (12–34px), a 4px spacing grid, radii, control heights (28/32/36), two elevations and z-layers. Each colour is written once as `light-dark()`; the theme only sets `color-scheme`, so the light palette is no longer duplicated for "Match system". The legacy aliases (`--green`, `--paper`, …) are gone.
+- Mono is reserved for counts, times, dates and keys. Feed names, hints, descriptions, section labels and the reader kicker are sans. The sidebar keeps the enlarged sizes requested above.
+- Action buttons share one 32px height and radius. Form on/off checkboxes are drawn as the same switch as `Switch` while still submitting with their forms. Row read/star targets are 28×32 around unchanged glyphs. An unsaved star appears on hover, focus or selection.
+- The stream controls, including sort, sit on one row that wraps as a group. The reader's reading time and read/star share a line. A stale feed's reason is the Updated cell's tooltip; only failures keep a badge.

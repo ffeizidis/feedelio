@@ -376,7 +376,7 @@ function UpdateNow({ data, act, feedId, checked }) {
       title={checked ? "Last checked " + ago(checked) + " ago" : undefined}
       onClick={() => act(...refreshJob(feedId))}
     >
-      <RefreshCw size={13} className={pending ? "spin" : ""} />
+      <RefreshCw size={14} className={pending ? "spin" : ""} />
       {pending ? "Updating…" : "Update now"}
     </button>
   );
@@ -844,9 +844,8 @@ function App() {
           300,
           Math.min(
             1000,
-            viewport - sidebarSize - 300,
-            (listWidth ?? settings.list_width ?? 590) +
-              (e.key === "[" ? -20 : 20),
+            viewport - sidebarSize - readerMin,
+            listSize + (e.key === "[" ? -20 : 20),
           ),
         );
         setListWidth(width);
@@ -916,7 +915,7 @@ function App() {
   if (!data)
     return (
       <main className="loading">
-        <Rss size={30} />
+        <Rss size={28} />
         <h2>
           {overview.error
             ? "Couldn’t open your library"
@@ -947,11 +946,14 @@ function App() {
       Math.max(180, viewport - 680),
     ),
   );
+  // The reader is what the other two panes are for, so it keeps enough room
+  // for a readable measure and the list gives way first.
+  const readerMin = Math.round(Math.min(560, Math.max(380, viewport * 0.36)));
   const listSize = Math.max(
     300,
     Math.min(
       listWidth ?? settings.list_width ?? 590,
-      Math.max(300, viewport - sidebarSize - 300),
+      Math.max(300, viewport - sidebarSize - readerMin),
     ),
   );
   // Unread-only hides caught-up feeds and folders, but never the one being read.
@@ -987,13 +989,13 @@ function App() {
               onClick={() => toggleFolder(f.id)}
             >
               {collapsed["nav" + f.id] ? (
-                <ChevronRight size={13} />
+                <ChevronRight size={14} />
               ) : (
-                <ChevronDown size={13} />
+                <ChevronDown size={14} />
               )}
             </button>
             <button onClick={() => stream("all", { folder_id: f.id })}>
-              <Folder size={15} />
+              <Folder size={16} />
               <span onMouseEnter={fullOnHover}>{f.name}</span>
               <span className="count" data-unread={f.unread}>
                 {f.unread || ""}
@@ -1020,7 +1022,7 @@ function App() {
                     <i className="hue-dot" />
                     <span onMouseEnter={fullOnHover}>{f.title}</span>
                     {f.health === "error" && (
-                      <AlertCircle size={13} className="error-color" />
+                      <AlertCircle size={14} className="error-color" />
                     )}
                     <span className="count" data-unread={f.unread}>
                       {f.unread || ""}
@@ -1144,7 +1146,7 @@ function App() {
           label="Resize feeds pane"
           value={sidebarSize}
           min={180}
-          max={Math.min(600, viewport - listSize - 300)}
+          max={Math.min(600, viewport - 300 - readerMin)}
           onChange={setPaneWidth}
           onSave={(v) => {
             setPaneWidth(v);
@@ -1199,52 +1201,63 @@ function App() {
               {searchOpen ? "results" : count === 1 ? "article" : "articles"} ·{" "}
               {articles.data?.unread || 0} unread
             </span>
-            <UpdateNow
-              data={data}
-              act={run}
-              feedId={scope.feed_id}
-              checked={activeFeed?.checked}
-            />
-            <Switch
-              label="Unread only"
-              checked={!!settings.hide_read}
-              onChange={(v) => pref("hide_read", v)}
-            />
-            {activeFeed && (
-              <IconButton
-                icon={Bookmark}
-                className={
-                  "icon-button " +
-                  (activeFeed.options.bookmarked ? "bookmarked" : "")
-                }
-                label={
-                  activeFeed.options.bookmarked
-                    ? "Remove bookmark"
-                    : "Bookmark this feed"
-                }
-                aria-pressed={!!activeFeed.options.bookmarked}
-                onClick={() =>
-                  run(
-                    "edit_feed",
-                    {
-                      id: activeFeed.id,
-                      options: {
-                        ...activeFeed.options,
-                        bookmarked: !activeFeed.options.bookmarked,
-                      },
-                    },
-                    activeFeed.options.bookmarked
-                      ? "Bookmark removed"
-                      : "Feed bookmarked",
-                  )
-                }
+            <div className="stream-controls">
+              <UpdateNow
+                data={data}
+                act={run}
+                feedId={scope.feed_id}
+                checked={activeFeed?.checked}
               />
-            )}
-            <IconButton
-              icon={CheckCheck}
-              label="Mark this stream as read"
-              onClick={markAll}
-            />
+              <Switch
+                label="Unread only"
+                checked={!!settings.hide_read}
+                onChange={(v) => pref("hide_read", v)}
+              />
+              <button
+                className="sort-toggle"
+                onClick={() =>
+                  pref("sort", settings.sort === "oldest" ? "newest" : "oldest")
+                }
+              >
+                <ArrowUpDown size={14} />
+                {settings.sort === "oldest" ? "Oldest first" : "Newest first"}
+              </button>
+              {activeFeed && (
+                <IconButton
+                  icon={Bookmark}
+                  className={
+                    "icon-button " +
+                    (activeFeed.options.bookmarked ? "bookmarked" : "")
+                  }
+                  label={
+                    activeFeed.options.bookmarked
+                      ? "Remove bookmark"
+                      : "Bookmark this feed"
+                  }
+                  aria-pressed={!!activeFeed.options.bookmarked}
+                  onClick={() =>
+                    run(
+                      "edit_feed",
+                      {
+                        id: activeFeed.id,
+                        options: {
+                          ...activeFeed.options,
+                          bookmarked: !activeFeed.options.bookmarked,
+                        },
+                      },
+                      activeFeed.options.bookmarked
+                        ? "Bookmark removed"
+                        : "Feed bookmarked",
+                    )
+                  }
+                />
+              )}
+              <IconButton
+                icon={CheckCheck}
+                label="Mark this stream as read"
+                onClick={markAll}
+              />
+            </div>
           </div>
           {archive && !searchOpen && (
             <button
@@ -1253,7 +1266,7 @@ function App() {
               onClick={() => openFeedSettings(activeFeed.id)}
             >
               {archive.status === "running" && (
-                <Loader2 size={13} className="spin" />
+                <Loader2 size={14} className="spin" />
               )}
               {archiveSummary(archive)}
             </button>
@@ -1270,16 +1283,6 @@ function App() {
               <span>{data.feeds.length} feeds · all time</span>
             </div>
           )}
-          <div className="stream-utilities">
-            <button
-              onClick={() =>
-                pref("sort", settings.sort === "oldest" ? "newest" : "oldest")
-              }
-            >
-              <ArrowUpDown size={13} />
-              {settings.sort === "oldest" ? "Oldest first" : "Newest first"}
-            </button>
-          </div>
         </div>
         <div
           className={
@@ -1303,7 +1306,7 @@ function App() {
             </div>
           ) : !items.length ? (
             <div className="list-empty">
-              <Leaf size={27} />
+              <Leaf size={28} />
               <h3>
                 {q
                   ? "No matches yet"
@@ -1411,7 +1414,7 @@ function App() {
           label="Resize article list"
           value={listSize}
           min={300}
-          max={Math.min(1000, viewport - sidebarSize - 300)}
+          max={Math.min(1000, viewport - sidebarSize - readerMin)}
           start={sidebarSize}
           onChange={setListWidth}
           onSave={(v) => {
@@ -1421,7 +1424,7 @@ function App() {
         />
         {!selected ? (
           <div className="reader-empty">
-            <BookOpen size={26} />
+            <BookOpen size={28} />
             <h2>A little room to read.</h2>
             <p>Choose an article title to start reading.</p>
             <button onClick={() => setModal("keys")}>
@@ -1473,21 +1476,21 @@ function App() {
                     <span className="kicker-sep">·</span>
                     <time dateTime={a.published}>{fullDate(a.published)}</time>
                   </div>
-                  <details className="article-details">
-                    <summary>
-                      {a.duration
-                        ? `${clock(a.duration)} ${
-                            (a.enclosures || []).some((e) =>
-                              (e.type || "").startsWith("audio/"),
-                            )
-                              ? "listen"
-                              : "video"
-                          }`
-                        : `${a.reading_minutes} min read · ${a.words.toLocaleString()} words`}
-                    </summary>
-                    {a.author && <p>By {a.author}</p>}
-                  </details>
                   <div className="reader-meta">
+                    <details className="article-details">
+                      <summary>
+                        {a.duration
+                          ? `${clock(a.duration)} ${
+                              (a.enclosures || []).some((e) =>
+                                (e.type || "").startsWith("audio/"),
+                              )
+                                ? "listen"
+                                : "video"
+                            }`
+                          : `${a.reading_minutes} min read · ${a.words.toLocaleString()} words`}
+                      </summary>
+                      {a.author && <p>By {a.author}</p>}
+                    </details>
                     <span className="reader-meta-actions">
                       <ReadStar
                         item={a}
@@ -1536,7 +1539,7 @@ function App() {
                                 )
                               }
                             >
-                              <Download size={15} />
+                              <Download size={16} />
                               Download
                             </button>
                           </div>
@@ -1555,7 +1558,7 @@ function App() {
                         className="image-notice"
                         onClick={() => setLoadImages(true)}
                       >
-                        <Image size={15} />
+                        <Image size={16} />
                         Images are paused. Load images for this article.
                       </button>
                     )}
@@ -1566,13 +1569,13 @@ function App() {
                     />
                   ) : (
                     <div className="no-body">
-                      <FileText size={27} />
+                      <FileText size={28} />
                       <p>This feed provided a link without article text.</p>
                       <button
                         className="primary"
                         onClick={() => run(...extractJob(a.id))}
                       >
-                        Fetch full article <ArrowUpRight size={15} />
+                        Fetch full article <ArrowUpRight size={16} />
                       </button>
                     </div>
                   )}
@@ -1652,7 +1655,7 @@ function App() {
           className={"toast " + (toast.error ? "error" : "")}
           role={toast.error ? "alert" : "status"}
         >
-          {toast.error ? <AlertCircle size={17} /> : <Check size={17} />}
+          {toast.error ? <AlertCircle size={16} /> : <Check size={16} />}
           <span>{toast.message}</span>
           {!toast.error && data.undo.length > 0 && (
             <button onClick={() => run("undo", {}, "Last change undone")}>
@@ -2134,7 +2137,7 @@ function Library({
                       onChange={setStatus}
                     />
                     <button className="primary" onClick={onSubscribe}>
-                      <Plus size={15} />
+                      <Plus size={16} />
                       Add feed
                     </button>
                   </div>
@@ -2167,7 +2170,7 @@ function Library({
                           )
                         }
                       >
-                        <RefreshCw size={15} />
+                        <RefreshCw size={16} />
                       </button>
                       <button
                         onClick={() =>
@@ -2181,7 +2184,7 @@ function Library({
                           })
                         }
                       >
-                        <Trash2 size={15} />
+                        <Trash2 size={16} />
                         Delete
                       </button>
                       <form
@@ -2272,11 +2275,12 @@ function Library({
                                 "feed-updated " +
                                 (issue?.kind || (f.checked ? "healthy" : ""))
                               }
+                              title={issue?.note}
                             >
                               {issue?.label || elapsed(f.checked)}
                             </span>
                             <span>
-                              {issue && (
+                              {issue?.kind === "error" && (
                                 <span
                                   className={"feed-issue " + issue.kind}
                                   title={issue.note}
@@ -2355,7 +2359,7 @@ function Library({
                   {j.status === "done" && (
                     <>
                       <a href={"/api/downloads/" + j.id} download>
-                        <Download size={17} />
+                        <Download size={16} />
                       </a>
                       <IconButton
                         icon={Trash2}
@@ -2513,7 +2517,7 @@ function FeedEditor({ feed: f, data, act, onBack }) {
   return (
     <form onSubmit={save}>
       <button type="button" className="text-button" onClick={onBack}>
-        <ChevronLeft size={15} />
+        <ChevronLeft size={16} />
         Subscriptions
       </button>
       <h3 className="feed-editor-title">
@@ -2522,11 +2526,11 @@ function FeedEditor({ feed: f, data, act, onBack }) {
       </h3>
       <p className="feed-links">
         <a href={f.url} target="_blank" rel="noreferrer">
-          <Rss size={13} /> {f.url}
+          <Rss size={14} /> {f.url}
         </a>
         {f.site_url && (
           <a href={f.site_url} target="_blank" rel="noreferrer">
-            <ExternalLink size={13} /> {f.site_url}
+            <ExternalLink size={14} /> {f.site_url}
           </a>
         )}
       </p>
@@ -2861,28 +2865,30 @@ function DataSettings({ data, act, submit }) {
           Remove all
         </button>
       </div>
-      <div className="data-card">
+      <div className="data-export-row">
         <div>
-          <h3>Your entire library, in one file</h3>
-          <p>
+          <span>Your entire library, in one file</span>
+          <small>
             Articles, folders, tags, saved items, settings, history, rules and
             downloaded episodes. Restore into an empty library. Audio makes this
             file larger.
-          </p>
+          </small>
         </div>
-        <a className="button" href="/api/export/json" download>
-          <Download size={15} />
-          Full JSON backup
-        </a>
-        <label className="file-button">
-          Restore JSON
-          <input
-            type="file"
-            accept=".json"
-            disabled={!!data.feeds.length}
-            onChange={(e) => importFile(e, "json")}
-          />
-        </label>
+        <div className="row-actions">
+          <a className="button" href="/api/export/json" download>
+            <Download size={16} />
+            Full JSON backup
+          </a>
+          <label className="file-button">
+            Restore JSON
+            <input
+              type="file"
+              accept=".json"
+              disabled={!!data.feeds.length}
+              onChange={(e) => importFile(e, "json")}
+            />
+          </label>
+        </div>
       </div>
       <form
         className="data-card"

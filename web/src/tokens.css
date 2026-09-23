@@ -1,113 +1,109 @@
+/* Every colour is written once, as light-dark(light, dark); the theme only
+   chooses which half applies by setting color-scheme. */
 :root {
   color-scheme: dark;
-  --ground: #1a1d21;
-  --raised: #23272c;
-  --raised-2: #1e2126;
-  --field: #15181b;
-  --line: #2c3138;
-  --line-strong: #3a4148;
-  --ink: #e3e7ea;
-  --muted: #9aa2ab;
-  --dim: #7b838c;
-  --faint: #4b525a;
-  --icon-off: #9aa2ab;
+  --ground: light-dark(#edefe9, #1a1d21);
+  --raised: light-dark(#e1e4dc, #23272c);
+  --raised-2: light-dark(#e7e9e2, #1e2126);
+  --field: light-dark(#e6e9e1, #15181b);
+  --line: light-dark(#d5d9cf, #2c3138);
+  --line-strong: light-dark(#afb5aa, #3a4148);
+  --ink: light-dark(#1a1d21, #e3e7ea);
+  --muted: light-dark(#5c646d, #9aa2ab);
+  --dim: light-dark(#5c646d, #7b838c);
+  --faint: light-dark(#7c838b, #4b525a);
+  --icon-off: light-dark(#7c838b, #9aa2ab);
   --accent-hue: 255;
-  --accent: oklch(0.7 0.19 var(--accent-hue));
-  --accent-hover: oklch(0.76 0.17 var(--accent-hue));
-  --accent-wash: oklch(0.7 0.19 var(--accent-hue) / 0.12);
-  --accent-line: oklch(0.7 0.19 var(--accent-hue) / 0.55);
-  --gold: #d5b26a;
-  --danger: oklch(0.7 0.16 25);
-  --healthy: oklch(0.72 0.15 150);
-  --feed-lightness: initial;
-  --feed-chroma: initial;
-  --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --accent-hue-light: 262;
+  --accent: light-dark(
+    oklch(0.52 0.19 var(--accent-hue-light)),
+    oklch(0.7 0.19 var(--accent-hue))
+  );
+  --accent-hover: light-dark(
+    oklch(0.46 0.18 var(--accent-hue-light)),
+    oklch(0.76 0.17 var(--accent-hue))
+  );
+  --accent-wash: color-mix(in oklch, var(--accent) 12%, transparent);
+  --accent-line: color-mix(in oklch, var(--accent) 55%, transparent);
+  --on-accent: light-dark(#fff, #10131a);
+  --gold: light-dark(oklch(0.52 0.13 80), #d5b26a);
+  --danger: light-dark(oklch(0.5 0.16 25), oklch(0.7 0.16 25));
+  --danger-wash: color-mix(in oklch, var(--danger) 12%, transparent);
+  --healthy: light-dark(oklch(0.52 0.15 150), oklch(0.72 0.15 150));
+  --scrim: light-dark(#1a1d2155, #0009);
+
+  --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --serif: Georgia, "Times New Roman", serif;
-  --paper: var(--ground);
-  --sidebar: var(--ground);
-  --green: var(--accent);
-  --green-hover: var(--accent-hover);
-  --on-green: #10131a;
-  --green-soft: var(--accent-wash);
-  --line-soft: var(--line);
-  --group: var(--ground);
-  --selected: var(--raised);
-  --hover: var(--raised);
-  --icon-bg: var(--raised);
-  --error: var(--danger);
-  --error-bg: var(--raised);
+
+  /* Type: chrome never goes below 12px; mono is for numbers and keys. */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 22px;
+  --text-2xl: 30px;
+  --text-display: 34px;
+
+  /* Space, on a 4px grid. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --control-sm: 28px;
+  --control: 32px;
+  --control-lg: 36px;
+
+  --shadow-pop: 0 8px 28px #0000004d;
+  --shadow-dialog: 0 24px 80px #00000059;
+
+  --z-divider: 3;
+  --z-screen: 10;
+  --z-menu: 30;
+  --z-toast: 100;
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --accent-hue: 262;
-  --ground: #edefe9;
-  --raised: #e1e4dc;
-  --raised-2: #e7e9e2;
-  --field: #e6e9e1;
-  --line: #d5d9cf;
-  --line-strong: #afb5aa;
-  --ink: #1a1d21;
-  --muted: #5c646d;
-  --dim: #5c646d;
-  --faint: #7c838b;
-  --icon-off: #7c838b;
-  --accent: oklch(0.52 0.19 var(--accent-hue));
-  --accent-hover: oklch(0.46 0.18 var(--accent-hue));
-  --accent-wash: oklch(0.52 0.19 var(--accent-hue) / 0.1);
-  --accent-line: oklch(0.52 0.19 var(--accent-hue) / 0.55);
-  --gold: oklch(0.52 0.13 80);
-  --danger: oklch(0.5 0.16 25);
-  --healthy: oklch(0.52 0.15 150);
-  --feed-lightness: 0.49;
-  --feed-chroma: 0.14;
-  --on-green: #fff;
 }
 @media (prefers-color-scheme: light) {
   :root[data-theme="system"] {
     color-scheme: light;
-    --accent-hue: 262;
-    --ground: #edefe9;
-    --raised: #e1e4dc;
-    --raised-2: #e7e9e2;
-    --field: #e6e9e1;
-    --line: #d5d9cf;
-    --line-strong: #afb5aa;
-    --ink: #1a1d21;
-    --muted: #5c646d;
-    --dim: #5c646d;
-    --faint: #7c838b;
-    --icon-off: #7c838b;
-    --accent: oklch(0.52 0.19 var(--accent-hue));
-    --accent-hover: oklch(0.46 0.18 var(--accent-hue));
-    --accent-wash: oklch(0.52 0.19 var(--accent-hue) / 0.1);
-    --accent-line: oklch(0.52 0.19 var(--accent-hue) / 0.55);
-    --gold: oklch(0.52 0.13 80);
-    --danger: oklch(0.5 0.16 25);
-    --healthy: oklch(0.52 0.15 150);
-    --feed-lightness: 0.49;
-    --feed-chroma: 0.14;
-    --on-green: #fff;
   }
 }
 :root[data-accent="violet"] {
   --accent-hue: 300;
+  --accent-hue-light: 300;
 }
 :root[data-accent="green"] {
   --accent-hue: 145;
+  --accent-hue-light: 145;
 }
 :root[data-accent="amber"] {
   --accent-hue: 85;
+  --accent-hue-light: 85;
 }
 :root[data-accent="red"] {
   --accent-hue: 25;
+  --accent-hue-light: 25;
 }
 [class*="feed-hue-"] {
   --feed-hue: 255;
   --feed-dark-lightness: 0.7;
   --feed-dark-chroma: 0.19;
-  --feed-color: oklch(
-    var(--feed-lightness, var(--feed-dark-lightness))
-      var(--feed-chroma, var(--feed-dark-chroma)) var(--feed-hue)
+  --feed-color: light-dark(
+    oklch(0.49 0.14 var(--feed-hue)),
+    oklch(var(--feed-dark-lightness) var(--feed-dark-chroma) var(--feed-hue))
   );
 }
 .feed-hue-1 {

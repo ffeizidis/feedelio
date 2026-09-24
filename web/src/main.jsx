@@ -164,6 +164,16 @@ async function api(path, body) {
 const cmd = (name, payload = {}) => api("actions/" + name, { payload });
 // A publisher's page always opens disowned, in its own tab.
 const openExternal = (url) => window.open(url, "_blank", "noopener,noreferrer");
+// Middle click opens a new tab, like on a link: the original for a title, the
+// feed for a feed name, the website for a reading-list page.
+const middleClick = (url) => ({
+  onMouseDown: (e) => e.button === 1 && e.preventDefault(),
+  onAuxClick: (e) => {
+    if (e.button !== 1 || !url) return;
+    e.preventDefault();
+    openExternal(url);
+  },
+});
 // The feed list's scrollbar shows only while it is being scrolled.
 const showScrollbar = (e) => {
   const el = e.currentTarget;
@@ -179,7 +189,7 @@ const refreshJob = (feedId) => [
 ];
 const extractJob = (articleId) => [
   "enqueue",
-  { kind: "extract", payload: { article_id: articleId } },
+  { kind: "extract", payload: { article_id: articleId, asked: true } },
   "Full article extraction queued",
 ];
 // A comma-separated field as a list of tags.
@@ -626,8 +636,16 @@ function App() {
     queryKey: ["article", selected],
     queryFn: () => api("articles/" + selected),
     enabled: !!selected,
-    refetchInterval: 10000,
+    // Text on its way from the page arrives within seconds of the fetch.
+    refetchInterval: (query) =>
+      query.state.data?.extracting && !query.state.data.body ? 2000 : 10000,
   });
+  // An article opened before its text was fetched goes to the front of the
+  // queue: a Reading List import can leave a thousand pages waiting.
+  const waiting = article.data?.extracting && !article.data.body;
+  useEffect(() => {
+    if (waiting) cmd(...extractJob(selected).slice(0, 2)).catch(() => {});
+  }, [waiting, selected]);
   // The tab names what is open: the article, the library, or the stream.
   const tabTitle =
     selected && article.data?.title
@@ -1084,6 +1102,11 @@ function App() {
                     }
                     style={{ paddingLeft: 41 + depth * 14 }}
                     onClick={() => stream(paneView, { feed_id: f.id })}
+                    {...middleClick(
+                      (paneView === "bookmarks" ? "/bookmarks" : "") +
+                        "/f/" +
+                        f.id,
+                    )}
                   >
                     <i className="hue-dot" />
                     <span onMouseEnter={fullOnHover}>{f.title}</span>
@@ -1472,7 +1495,11 @@ function App() {
                   />
                 </div>
                 {item.feed_id === READING_LIST ? (
-                  <span className="row-feed" onMouseEnter={fullOnHover}>
+                  <span
+                    className="row-feed"
+                    onMouseEnter={fullOnHover}
+                    {...middleClick(item.url && new URL(item.url).origin)}
+                  >
                     {item.feed_title}
                   </span>
                 ) : (
@@ -1481,6 +1508,7 @@ function App() {
                       className="row-feed"
                       onMouseEnter={fullOnHover}
                       onClick={() => stream("all", { feed_id: item.feed_id })}
+                      {...middleClick("/f/" + item.feed_id)}
                     >
                       {item.feed_title}
                     </button>
@@ -1491,12 +1519,7 @@ function App() {
                   onMouseEnter={fullOnHover}
                   onClick={() => openTitle(item)}
                   // Middle click opens the original in a new tab, like a link.
-                  onMouseDown={(e) => e.button === 1 && e.preventDefault()}
-                  onAuxClick={(e) => {
-                    if (e.button !== 1 || !item.url) return;
-                    e.preventDefault();
-                    openExternal(item.url);
-                  }}
+                  {...middleClick(item.url)}
                 >
                   <ArticleMarks item={item} />
                   <Highlight text={item.title} query={q} />
@@ -1599,10 +1622,13 @@ function App() {
                   >
                     <i className="hue-dot" />
                     {a.feed_id === READING_LIST ? (
-                      <span>{a.feed_title}</span>
+                      <span {...middleClick(a.url && new URL(a.url).origin)}>
+                        {a.feed_title}
+                      </span>
                     ) : (
                       <button
                         onClick={() => stream("all", { feed_id: a.feed_id })}
+                        {...middleClick("/f/" + a.feed_id)}
                       >
                         {a.feed_title}
                       </button>
@@ -1706,6 +1732,11 @@ function App() {
                       body={a.body}
                       images={settings.images || loadImages}
                     />
+                  ) : a.extracting ? (
+                    <div className="no-body">
+                      <Loader2 className="spin" size={28} />
+                      <p>Fetching the article text from its page…</p>
+                    </div>
                   ) : (
                     <div className="no-body">
                       <FileText size={28} />

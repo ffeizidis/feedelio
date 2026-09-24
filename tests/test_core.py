@@ -387,6 +387,34 @@ def test_the_reading_list_is_a_view_of_its_own(core, site):
     assert core.articles(view="reading", unread=True)["total"] == 1
 
 
+def test_reading_list_pages_are_dated_when_added_and_opened_ones_extract_first(core, monkeypatch):
+    entries = [
+        {
+            "url": f"https://example.org/{n}",
+            "title": f"Page {n}",
+            "hasBeenRead": False,
+            "lastUpdateTime": 1,
+            "creationTime": added,
+        }
+        for n, added in (("old", 1_700_000_000_000), ("new", 1_760_000_000_000), ("mid", 1_730_000_000_000))
+    ]
+    # Pages imported before dates were sent get theirs on the next sync.
+    core.chrome_sync([{k: v for k, v in e.items() if k != "creationTime"} for e in entries])
+    core.chrome_sync(entries)
+    items = core.articles(view="reading")["items"]
+    assert [a["title"] for a in items] == ["Page new", "Page mid", "Page old"]
+    assert items[0]["published"].startswith("2025-10-09")
+
+    # Every page waits for its text; the one being read jumps the queue.
+    old = items[-1]["id"]
+    assert core.article(old)["extracting"]
+    ran = []
+    monkeypatch.setattr(core, "extract_article", lambda article_id: ran.append(article_id) or {})
+    core.enqueue("extract", {"article_id": old, "asked": True})
+    core.tick()
+    assert ran == [old] and not core.article(old)["extracting"]
+
+
 def test_feed_health_is_decided_once_for_the_whole_app(core, site):
     # The library filter, the sidebar and the feed list all read this verdict,
     # so a feed with nothing new for a fortnight is stale everywhere at once.

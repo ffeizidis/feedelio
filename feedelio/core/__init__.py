@@ -840,6 +840,12 @@ class Core:
             (id,),
         )
         a.pop("options")
+        a["extracting"] = bool(
+            self.rows(
+                "SELECT 1 FROM jobs WHERE kind='extract' AND status IN ('queued','running') AND json_extract(payload,'$.article_id')=?",
+                (id,),
+            )
+        )
         if a["feed_id"] == READING_LIST:
             a["feed_title"] = site_name(a["url"])
         return a
@@ -1251,17 +1257,25 @@ class Core:
                         (json.dumps(payload, sort_keys=True), pending[0]["id"]),
                     )
                     return pending[0]
+        # An extraction someone is waiting for (an open article) goes ahead of
+        # the backlog, e.g. a thousand pages from a Reading List import.
+        asked = kind == "extract" and bool(payload.pop("asked", False))
         encoded = json.dumps(payload, sort_keys=True)
         pending = self.rows(
             "SELECT id FROM jobs WHERE kind=? AND payload=? AND status IN ('queued','running')",
             (kind, encoded),
         )
         if pending:
+            if asked:
+                self.db.execute(
+                    "UPDATE jobs SET result=json_set(coalesce(result,'{}'),'$.asked',1) WHERE id=?",
+                    (pending[0]["id"],),
+                )
             return pending[0]
         id = uid()
         self.db.execute(
-            "INSERT INTO jobs(id,kind,payload,created,updated) VALUES(?,?,?,?,?)",
-            (id, kind, encoded, now(), now()),
+            "INSERT INTO jobs(id,kind,payload,created,updated,result) VALUES(?,?,?,?,?,?)",
+            (id, kind, encoded, now(), now(), json.dumps({"asked": 1}) if asked else None),
         )
         return {"id": id}
 
@@ -1804,7 +1818,7 @@ class Core:
                 LEFT JOIN feeds f ON f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0
                 WHERE status='queued' AND coalesce(json_extract(result,'$.not_before'),'')<=?
                 AND (kind!='backfill' OR f.id IS NOT NULL)
-                ORDER BY CASE kind WHEN 'extract' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
+                ORDER BY CASE kind WHEN 'extract' THEN 3 - 4*coalesce(json_extract(result,'$.asked'),0) WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
                   WHEN 'refresh' THEN -coalesce(json_extract(payload,'$.manual'),0) ELSE 0 END,
                   updated,created
             """,
@@ -2194,7 +2208,11 @@ class Core:
             if urlsplit(url).scheme not in ("http", "https"):
                 continue
             # Preserve exact Chrome URLs for synchronization; cleaning only affects the article URL.
-            id = self.ingest(feed_id, url, e.get("title") or url, url)
+            # A page is dated when it was added to the list, so the view reads
+            # newest first like any stream (and an import is not one moment).
+            added = e.get("creationTime")
+            published = datetime.fromtimestamp(added / 1000, timezone.utc).isoformat() if added else None
+            id = self.ingest(feed_id, url, e.get("title") or url, url, published=published)
             if not id:
                 continue
             # State sync needs a few columns, not the rendered article; the list

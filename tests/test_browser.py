@@ -621,6 +621,14 @@ def test_middle_clicking_a_title_opens_the_original_in_a_new_tab(core, site, web
         # The list stays as it was: nothing opened in the reader, nothing read.
         expect(page.locator(".reading-content h1")).to_have_count(0)
         expect(page.locator(".article-row.unread")).to_have_count(1)
+        # A feed name, in the list or the feeds pane, opens that feed.
+        for name in (page.locator(".article-row .row-feed"), page.locator(".sidebar .feed-line")):
+            with page.context.expect_page() as opened:
+                name.click(button="middle")
+            assert opened.value.url == web_server + "/f/" + feed
+            expect(opened.value.locator(".list-heading h1")).to_contain_text("The Sunday Journal")
+            opened.value.close()
+        expect(page).to_have_url(web_server + "/")
         browser.close()
 
 
@@ -780,6 +788,11 @@ def test_the_reading_list_has_its_own_view_in_the_tray(core, site, web_server):
         expect(row).to_have_count(1)
         expect(row.locator(".row-feed")).to_have_text("example.org")
         expect(row.locator("button.row-feed")).to_have_count(0)
+        # Its website's name opens the website on a middle click.
+        with page.context.expect_page() as opened:
+            row.locator(".row-feed").click(button="middle")
+        assert opened.value.url == "https://www.example.org/"
+        opened.value.close()
         row.get_by_role("button", name="Mark read: Saved page").click()
         expect(reading.locator(".badge")).to_have_count(0)
         page.reload()

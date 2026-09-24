@@ -223,9 +223,6 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("button", name="Bookmarked feeds").click()
         expect(page).to_have_title("feedelio - Bookmarked feeds")
         expect(page.locator(".article-row")).to_have_count(3)
-        # Bookmarked feeds has no feed list; All articles brings it back.
-        expect(page.locator(".sidebar")).to_have_count(0)
-        page.get_by_role("button", name="All articles", exact=True).click()
         page.locator(".feed-line", has_text="The Sunday Journal").click()
         # Update now queues one refresh and stays busy until the worker takes it
         # (the subscription's own initial refresh is still queued: no worker here).
@@ -677,7 +674,7 @@ def test_the_tray_is_always_there_and_the_feeds_pane_only_with_feed_lists(core, 
         expect(pane.get_by_role("button", name="New folder")).to_have_count(0)
         expect(pane.get_by_role("button", name="Add a subscription")).to_have_count(0)
 
-        for name in ("Saved", "Bookmarked feeds", "History"):
+        for name in ("Saved", "History"):
             tray.get_by_role("button", name=name, exact=True).click()
             expect(tray.get_by_role("button", name=name, exact=True)).to_have_attribute(
                 "aria-current", "page"
@@ -706,4 +703,43 @@ def test_the_tray_is_always_there_and_the_feeds_pane_only_with_feed_lists(core, 
         library_tray.get_by_role("button", name="Saved", exact=True).click()
         expect(library).to_have_count(0)
         expect(page).to_have_title("feedelio - Saved for later")
+        browser.close()
+
+
+def test_bookmarked_feeds_narrows_like_all_articles(core, site, web_server):
+    """Bookmarked feeds lists only the bookmarked feeds and their folders; a
+    feed or folder picked there shows its articles, otherwise all of theirs."""
+    base, _, _ = site
+    essays = core.save_folder("Essays")["id"]
+    news = core.save_folder("News")["id"]
+    kept = core.subscribe(base + "/rss?a", essays, "Kept Journal", {"bookmarked": True})["id"]
+    other = core.subscribe(base + "/rss?b", essays, "Other Journal")["id"]
+    daily = core.subscribe(base + "/rss?c", news, "Daily Wire")["id"]
+    for feed, slug in ((kept, "k1"), (kept, "k2"), (other, "o1"), (daily, "d1")):
+        core.ingest(feed, slug, "Story " + slug, base + "/" + slug, "<p>Body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(web_server)
+        page.get_by_role("navigation", name="Streams").get_by_role(
+            "button", name="Bookmarked feeds", exact=True
+        ).click()
+        pane = page.locator(".sidebar")
+        expect(pane.locator(".folder-line")).to_have_text([re.compile("Essays\\s*2")])
+        expect(pane.locator(".feed-line")).to_have_text([re.compile("Kept Journal")])
+        expect(page.locator(".article-row")).to_have_count(2)
+
+        pane.locator(".feed-line", has_text="Kept Journal").click()
+        expect(page).to_have_url(web_server + "/bookmarks/f/" + kept)
+        expect(page.locator(".list-heading h1")).to_contain_text("Kept Journal")
+        expect(page.locator(".article-row")).to_have_count(2)
+        page.reload()
+        expect(pane.locator(".feed-line.active")).to_have_text(re.compile("Kept Journal"))
+
+        # The folder shows its bookmarked feeds' articles, not the others'.
+        pane.locator(".folder-line > button:not(.disclosure)", has_text="Essays").click()
+        expect(page).to_have_url(web_server + "/bookmarks/d/" + essays)
+        expect(page.locator(".article-row")).to_have_count(2)
+        expect(page.locator(".article-row", has_text="Story o1")).to_have_count(0)
         browser.close()

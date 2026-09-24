@@ -87,10 +87,11 @@ try {
 } catch {
   /* An unavailable session store only loses the reading position. */
 }
-// The address names the page, so a reload or a shared link lands on the same
-// stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /history, /a/<article>.
 // Width of the always-visible tray at the far left, matching --tray-width.
 const TRAY_WIDTH = 64;
+// The address names the page, so a reload or a shared link lands on the same
+// stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /history,
+// /a/<article>; a bookmarked feed or folder is /bookmarks/f/<feed> or /bookmarks/d/<folder>.
 const LIBRARY_TABS = [
   "feeds",
   "folders",
@@ -112,13 +113,19 @@ function readLocation() {
   if (kind === "a" && id) return { selected: id };
   if (kind === "f" && id) return { view: "all", scope: { feed_id: id } };
   if (kind === "d" && id) return { view: "all", scope: { folder_id: id } };
+  if (kind === "bookmarks" && feed && (id === "f" || id === "d"))
+    return {
+      view: kind,
+      scope: id === "f" ? { feed_id: feed } : { folder_id: feed },
+    };
   if (["starred", "bookmarks", "history"].includes(kind)) return { view: kind };
   return {};
 }
 function pageUrl(selected, view, scope) {
   if (selected) return "/a/" + selected;
-  if (scope.feed_id) return "/f/" + scope.feed_id;
-  if (scope.folder_id) return "/d/" + scope.folder_id;
+  const within = view === "bookmarks" ? "/bookmarks" : "";
+  if (scope.feed_id) return within + "/f/" + scope.feed_id;
+  if (scope.folder_id) return within + "/d/" + scope.folder_id;
   return view === "all" ? "/" : "/" + view;
 }
 const start = Object.keys(resume).length ? resume : readLocation();
@@ -870,15 +877,17 @@ function App() {
         setListWidth(width);
         pref("list_width", width);
       } else if (e.key === "n" || e.key === "p") {
-        const index = data.feeds.findIndex((f) => f.id === scope.feed_id);
+        // Next and previous stay among the feeds the pane lists.
+        const feeds = data.feeds.filter(inPane);
+        const index = feeds.findIndex((f) => f.id === scope.feed_id);
         const feed =
-          data.feeds[
+          feeds[
             Math.max(
               0,
-              Math.min(data.feeds.length - 1, index + (e.key === "n" ? 1 : -1)),
+              Math.min(feeds.length - 1, index + (e.key === "n" ? 1 : -1)),
             )
           ];
-        if (feed) stream("all", { feed_id: feed.id });
+        if (feed) stream(paneView, { feed_id: feed.id });
       } else if (e.key === "o" && a) openExternal(a.url);
       else if (e.key === "r") run(...refreshJob(scope.feed_id));
       else if (e.key === "a") setModal("subscribe");
@@ -960,7 +969,14 @@ function App() {
     (data.backfills || []).find((j) => j.payload.feed_id === activeFeed.id);
   // The feeds pane belongs to the streams a feed list can narrow; the tray
   // to its left is always there.
-  const paneShown = view === "all" || !!scope.feed_id || !!scope.folder_id;
+  // Bookmarked feeds narrows like All articles, over bookmarked feeds only.
+  const paneView = view === "bookmarks" ? "bookmarks" : "all";
+  const inPane = (f) => paneView === "all" || !!f.options.bookmarked;
+  const paneShown =
+    view === "all" ||
+    view === "bookmarks" ||
+    !!scope.feed_id ||
+    !!scope.folder_id;
   const sidebarSize = Math.max(
     180,
     Math.min(
@@ -988,13 +1004,33 @@ function App() {
     id = data.folders.find((f) => f.id === id)?.parent_id
   )
     keep.add(id);
-  const shown = (f) => !unreadOnly || f.unread > 0 || scope.feed_id === f.id;
+  const shown = (f) =>
+    inPane(f) && (!unreadOnly || f.unread > 0 || scope.feed_id === f.id);
+  // Under Bookmarked feeds the pane lists only bookmarked feeds, the folders
+  // holding them, and folder counts from those feeds alone.
+  const paneFeeds = data.feeds.filter(inPane);
+  const within = (feed, folderId) => {
+    for (
+      let id = feed.folder_id;
+      id;
+      id = data.folders.find((f) => f.id === id)?.parent_id
+    )
+      if (id === folderId) return true;
+    return false;
+  };
+  const folderUnread = (folder) =>
+    paneView === "all"
+      ? folder.unread
+      : paneFeeds
+          .filter((f) => within(f, folder.id))
+          .reduce((n, f) => n + f.unread, 0);
   const folderTree = (parent = null, depth = 0) =>
     data.folders
       .filter(
         (f) =>
           f.parent_id === parent &&
-          (!unreadOnly || f.unread > 0 || keep.has(f.id)),
+          (paneView === "all" || paneFeeds.some((x) => within(x, f.id))) &&
+          (!unreadOnly || folderUnread(f) > 0 || keep.has(f.id)),
       )
       .map((f) => (
         <React.Fragment key={f.id}>
@@ -1017,11 +1053,11 @@ function App() {
                 <ChevronDown size={14} />
               )}
             </button>
-            <button onClick={() => stream("all", { folder_id: f.id })}>
+            <button onClick={() => stream(paneView, { folder_id: f.id })}>
               <Folder size={16} />
               <span onMouseEnter={fullOnHover}>{f.name}</span>
-              <span className="count" data-unread={f.unread}>
-                {f.unread || ""}
+              <span className="count" data-unread={folderUnread(f)}>
+                {folderUnread(f) || ""}
               </span>
             </button>
           </div>
@@ -1040,7 +1076,7 @@ function App() {
                       (scope.feed_id === f.id ? "active" : "")
                     }
                     style={{ paddingLeft: 41 + depth * 14 }}
-                    onClick={() => stream("all", { feed_id: f.id })}
+                    onClick={() => stream(paneView, { feed_id: f.id })}
                   >
                     <i className="hue-dot" />
                     <span onMouseEnter={fullOnHover}>{f.title}</span>
@@ -1180,8 +1216,13 @@ function App() {
             />
           </div>
           <div className="folder-tree" onScroll={showScrollbar}>
-            {data.feeds.length ? (
+            {paneFeeds.length ? (
               folderTree()
+            ) : paneView === "bookmarks" ? (
+              <p className="pane-empty">
+                No bookmarked feeds yet. Bookmark a feed from the button beside
+                its name above the article list.
+              </p>
             ) : (
               <button
                 className="add-first"

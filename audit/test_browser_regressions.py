@@ -49,7 +49,7 @@ def test_navigation_follows_folder_scope_and_returns_to_all(lab):
     p.keyboard.press("j")
     expect(p.locator(".reading-content h1")).to_have_text("Visible article")
     p.keyboard.press("Escape")
-    p.locator(".views button").filter(has_text="All articles").click()
+    p.locator(".tray").get_by_role("button", name="All articles").click()
     expect(p.locator(".article-row")).to_have_count(2)
     first_visible = p.locator(".article-row .row-title").first.inner_text()
     lab.open_title(first_visible)

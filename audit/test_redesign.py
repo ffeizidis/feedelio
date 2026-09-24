@@ -67,10 +67,8 @@ def test_feed_list_omits_repeated_source_and_sidebar_is_larger(lab):
     p.keyboard.press("a")
     expect(p.locator(".row-feed")).to_have_count(41)
     for selector, size in [
-        (".views button", 20),
         (".feed-line", 19),
         (".folder-line > button:not(.disclosure)", 18),
-        (".search-trigger", 18),
     ]:
         assert p.locator(selector).first.evaluate("e=>parseFloat(getComputedStyle(e).fontSize)") == size
     icon_url = p.locator('link[rel="icon"]').get_attribute("href")
@@ -92,16 +90,20 @@ def test_three_panes_geometry_and_independent_targets(lab, width):
     p = lab.page
     p.set_viewport_size({"width": width, "height": 900})
     seed(lab)
-    panes = [p.locator(s).bounding_box() for s in (".sidebar", ".stream-pane", ".reader-pane")]
-    assert all(b["y"] == 0 and b["height"] == 900 for b in panes)
+    tray, *panes = [
+        p.locator(s).bounding_box() for s in (".tray", ".sidebar", ".stream-pane", ".reader-pane")
+    ]
+    assert all(b["y"] == 0 and b["height"] == 900 for b in [tray, *panes])
     # The list keeps its 590px default until the reader would drop below its
     # minimum (36% of the window, 380-560px); then the list gives way.
     reader_min = round(min(560, max(380, width * 0.36)))
+    assert tray["x"] == 0 and tray["width"] == 64
     assert panes[0]["width"] == 252
-    assert panes[1]["width"] == min(590, width - 252 - reader_min)
+    assert panes[1]["width"] == min(590, width - 64 - 252 - reader_min)
     assert panes[2]["width"] >= reader_min
-    assert panes[1]["x"] == panes[0]["width"]
-    assert panes[2]["x"] == panes[0]["width"] + panes[1]["width"]
+    assert panes[0]["x"] == 64
+    assert panes[1]["x"] == panes[0]["x"] + panes[0]["width"]
+    assert panes[2]["x"] == panes[1]["x"] + panes[1]["width"]
     assert panes[2]["x"] + panes[2]["width"] == width
     row = p.locator(".article-row").first
     assert row.bounding_box()["height"] == 38
@@ -218,7 +220,7 @@ def test_settings_search_folders_and_design_screens(lab):
     p.keyboard.press("Escape")
     p.evaluate("document.documentElement.style.zoom='2'")
     expect(p.locator(".prose")).to_be_visible()
-    assert p.locator(".shell").evaluate("e=>getComputedStyle(e).gridTemplateColumns.split(' ').length") == 3
+    assert p.locator(".shell").evaluate("e=>getComputedStyle(e).gridTemplateColumns.split(' ').length") == 4
 
 
 @pytest.mark.features(10, 22)

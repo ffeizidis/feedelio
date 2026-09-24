@@ -14,12 +14,12 @@ def test_mark_filtered_stream_leaves_unrelated_articles_unread(lab, view):
     lab.show()
     p = lab.page
     if view == "search":
-        p.locator(".search-trigger").click()
+        p.locator(".tray").get_by_role("button", name="Search", exact=True).click()
         p.get_by_role("textbox", name="Search articles").fill("Target")
     elif view == "saved":
-        p.locator(".views").get_by_role("button", name=re.compile("Saved")).click()
+        p.locator(".tray").get_by_role("button", name=re.compile("Saved")).click()
     elif view == "history":
-        p.locator(".views").get_by_role("button", name="History", exact=True).click()
+        p.locator(".tray").get_by_role("button", name="History", exact=True).click()
     else:
         lab.open_title("Target story")
         p.keyboard.press("m")

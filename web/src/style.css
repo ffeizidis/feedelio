@@ -665,13 +665,19 @@ dialog::backdrop {
 /* --------------------------------------------------------------- Shell */
 /* All panes share one ground; separators show only on hover. */
 .shell {
+  --tray-width: 64px;
   display: grid;
   grid-template-columns:
-    var(--sidebar-width, 252px) var(--list-width, 590px)
+    var(--tray-width) var(--sidebar-width, 252px) var(--list-width, 590px)
     minmax(300px, 1fr);
   height: 100dvh;
   min-width: 900px;
   overflow: hidden;
+}
+.shell.no-pane {
+  grid-template-columns:
+    var(--tray-width) var(--list-width, 590px)
+    minmax(300px, 1fr);
 }
 .sidebar,
 .stream-pane,
@@ -706,99 +712,105 @@ dialog::backdrop {
   box-shadow: inset 1px 0 0 var(--accent-line);
 }
 
-/* ------------------------------------------------------------- Sidebar */
-.sidebar {
-  padding: var(--space-6) var(--space-5) var(--space-4) var(--space-4);
+/* ---------------------------------------------------------------- Tray */
+/* Always visible at the far left: streams, the library, search, a new feed. */
+.tray {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 0;
+  padding: var(--space-4) 0;
+  background: var(--raised-2);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  scrollbar-width: none;
 }
-.brand {
-  height: 50px;
-  padding-left: var(--space-4);
+.tray .brand {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 52px;
+  margin-bottom: var(--space-3);
   flex-shrink: 0;
-}
-.brand a {
-  color: var(--ink);
-  display: inline-flex;
-  align-items: baseline;
-  font: 600 29px/1 var(--sans);
-  letter-spacing: -0.025em;
   text-decoration: none;
 }
 .script-f {
   font:
-    400 78px/0.62 Italianno,
+    400 64px/0.62 Italianno,
     cursive;
   color: var(--accent);
 }
-.wordmark-rest {
-  margin-left: -2px;
-}
 .plain-wordmark {
+  font: 600 30px/1 var(--sans);
   color: var(--accent);
-  margin-right: 2px;
 }
-.private-label {
-  display: none;
-}
-/* Search, views and the FEEDS heading stay put; only the feed list scrolls. */
-.library-controls {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.library-controls > * {
+.tray button {
+  position: relative;
   flex-shrink: 0;
-}
-.search-trigger {
-  margin-top: var(--space-5);
-  padding: 6px 10px;
-  color: var(--muted);
-  font-size: 18px;
-}
-.search-trigger span {
-  font: var(--text-base) var(--mono);
-  color: var(--dim);
-}
-.views {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: var(--space-4);
-}
-.views button {
-  justify-content: flex-start;
-  flex-basis: auto;
-  gap: var(--space-3);
-  height: 38px;
-  padding: 0 10px;
-  font-size: 20px;
-  line-height: 1;
-  white-space: nowrap;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: var(--radius-md);
   color: var(--muted);
 }
-.views button:hover {
+.tray button:hover {
   color: var(--ink);
+  background: var(--raised);
 }
-.views button.active {
-  font-weight: 600;
-  color: var(--ink);
-}
-.views button svg {
-  width: 16px;
-  height: 16px;
-}
-.views button.active svg {
+.tray button.active {
   color: var(--accent);
+  background: var(--accent-wash);
 }
-.sidebar .count,
-.sidebar .pill {
+.tray button.active::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.tray svg {
+  width: 22px;
+  height: 22px;
+}
+.tray .badge {
+  position: absolute;
+  top: 1px;
+  left: 24px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 2px solid var(--raised-2);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font: 600 11px/16px var(--mono);
+  text-align: center;
+}
+.tray-gap {
+  flex-shrink: 0;
+  width: 24px;
+  margin: var(--space-2) 0;
+  border-top: 1px solid var(--line);
+}
+
+/* ------------------------------------------------------------- Sidebar */
+.sidebar {
+  padding: var(--space-6) var(--space-5) var(--space-4) var(--space-4);
+}
+.sidebar .count {
   font-size: 16px;
 }
+/* Only the feed list scrolls; the FEEDS heading stays put. */
 .subscriptions-heading {
   display: flex;
+  flex-shrink: 0;
   justify-content: space-between;
   align-items: center;
-  margin-top: var(--space-8);
+  min-height: 38px;
   padding: 0 var(--space-1) 0 10px;
 }
 .subscriptions-heading > h2 {
@@ -807,10 +819,6 @@ dialog::backdrop {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--dim);
-}
-.subscriptions-heading > div {
-  display: flex;
-  flex-direction: row-reverse;
 }
 .subscriptions-heading .icon-button {
   width: var(--control-sm);
@@ -821,11 +829,11 @@ dialog::backdrop {
   width: 16px;
   height: 16px;
 }
-.library-controls > .folder-tree {
+.sidebar > .folder-tree {
   flex: 1 1 0;
   min-height: 0;
   /* Reach into the sidebar's right padding: counts line up with the views
-     above, and the scrollbar keeps a clear gap from them. */
+     in the heading, and the scrollbar keeps a clear gap from them. */
   margin: var(--space-3) calc(-1 * var(--space-4)) 0 0;
   padding-right: var(--space-3);
   overflow-y: auto;
@@ -1682,7 +1690,9 @@ dialog::backdrop {
   inset: 0;
   z-index: var(--z-screen);
   display: grid;
-  grid-template-columns: var(--settings-width, 252px) minmax(0, 1fr);
+  grid-template-columns:
+    64px var(--settings-width, 252px)
+    minmax(0, 1fr);
   background: var(--ground);
   min-width: 900px;
   width: 100vw;
@@ -1699,17 +1709,6 @@ dialog::backdrop {
   padding: var(--space-6) var(--space-5) var(--space-4) var(--space-6);
   display: flex;
   flex-direction: column;
-}
-.back-to-reading {
-  justify-content: flex-start;
-  padding: 6px 0;
-  color: var(--accent);
-  font-size: 18px;
-  margin-bottom: var(--space-8);
-}
-.back-to-reading:hover {
-  background: none;
-  text-decoration: underline;
 }
 .settings-sidebar .section-label {
   font-size: var(--text-sm);
@@ -2686,15 +2685,13 @@ dialog::backdrop {
   animation: none !important;
 }
 :root[data-unread-marker="none"] .sidebar .count,
-:root[data-unread-marker="none"] .sidebar .pill {
+:root[data-unread-marker="none"] .tray .badge {
   visibility: hidden;
 }
-:root[data-unread-marker="dot"] .sidebar .count,
-:root[data-unread-marker="dot"] .sidebar .pill {
+:root[data-unread-marker="dot"] .sidebar .count {
   font-size: 0;
 }
-:root[data-unread-marker="dot"] .sidebar .count:not(:empty)::after,
-:root[data-unread-marker="dot"] .sidebar .pill:not(:empty)::after {
+:root[data-unread-marker="dot"] .sidebar .count:not(:empty)::after {
   content: "";
   display: block;
   width: 6px;
@@ -2702,9 +2699,17 @@ dialog::backdrop {
   border-radius: 50%;
   background: var(--muted);
 }
-:root[data-unread-marker="dot"] .sidebar .count[data-unread="0"]::after,
-:root[data-unread-marker="dot"] .sidebar .pill[data-unread="0"]::after {
+:root[data-unread-marker="dot"] .sidebar .count[data-unread="0"]::after {
   display: none;
+}
+:root[data-unread-marker="dot"] .tray .badge {
+  top: 8px;
+  left: 28px;
+  min-width: 0;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  font-size: 0;
 }
 @media (prefers-reduced-motion: reduce) {
   .pane-divider,

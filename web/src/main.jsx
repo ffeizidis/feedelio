@@ -89,9 +89,12 @@ try {
 }
 // Width of the always-visible tray at the far left, matching --tray-width.
 const TRAY_WIDTH = 64;
+// Chrome's Reading List arrives as one hidden feed; its articles show under
+// the website they are on, in their own view.
+const READING_LIST = "chrome";
 // The address names the page, so a reload or a shared link lands on the same
-// stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /history,
-// /a/<article>; a bookmarked feed or folder is /bookmarks/f/<feed> or /bookmarks/d/<folder>.
+// stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /reading,
+// /history, /a/<article>; a bookmarked feed or folder is /bookmarks/f/<feed> or /bookmarks/d/<folder>.
 const LIBRARY_TABS = [
   "feeds",
   "folders",
@@ -118,7 +121,8 @@ function readLocation() {
       view: kind,
       scope: id === "f" ? { feed_id: feed } : { folder_id: feed },
     };
-  if (["starred", "bookmarks", "history"].includes(kind)) return { view: kind };
+  if (["starred", "bookmarks", "reading", "history"].includes(kind))
+    return { view: kind };
   return {};
 }
 function pageUrl(selected, view, scope) {
@@ -274,6 +278,7 @@ const VIEW_TITLES = {
   all: "All articles",
   starred: "Saved for later",
   bookmarks: "Bookmarked feeds",
+  reading: "Reading list",
   history: "Recently read",
 };
 const streamTitle = (data, view, scope, q) =>
@@ -641,7 +646,9 @@ function App() {
   useEffect(() => {
     if (!placed.current && a && a.id === start.selected) {
       placed.current = true;
-      if (!scope.feed_id && !scope.folder_id) setScope({ feed_id: a.feed_id });
+      if (a.feed_id === READING_LIST) setView("reading");
+      else if (!scope.feed_id && !scope.folder_id)
+        setScope({ feed_id: a.feed_id });
     }
   }, [a]);
   // Unsubscribing from the feed on screen returns to all articles.
@@ -1152,6 +1159,14 @@ function App() {
           onStream("bookmarks"),
         ],
         [
+          "reading",
+          BookOpen,
+          "Reading list",
+          () => stream("reading"),
+          onStream("reading"),
+          data.counts.reading,
+        ],
+        [
           "history",
           Clock3,
           "History",
@@ -1298,12 +1313,14 @@ function App() {
               {articles.data?.unread || 0} unread
             </span>
             <div className="stream-controls">
-              <UpdateNow
-                data={data}
-                act={run}
-                feedId={scope.feed_id}
-                checked={activeFeed?.checked}
-              />
+              {view !== "reading" && (
+                <UpdateNow
+                  data={data}
+                  act={run}
+                  feedId={scope.feed_id}
+                  checked={activeFeed?.checked}
+                />
+              )}
               <Switch
                 label="Unread only"
                 checked={!!settings.hide_read}
@@ -1406,18 +1423,22 @@ function App() {
               <h3>
                 {q
                   ? "No matches yet"
-                  : data.feeds.length
-                    ? "A quiet moment."
-                    : "A fresh start."}
+                  : view === "reading"
+                    ? "Nothing on your reading list."
+                    : data.feeds.length
+                      ? "A quiet moment."
+                      : "A fresh start."}
               </h3>
               <p>
                 {q
                   ? "Try a different word or turn off unread only."
-                  : data.feeds.length
-                    ? "You’re all caught up here. New articles will arrive automatically."
-                    : "The things you love to read will find a home here."}
+                  : view === "reading"
+                    ? "Pages you add to Chrome’s Reading List show here, through the Feedelio companion extension (Manage library → Import & export)."
+                    : data.feeds.length
+                      ? "You’re all caught up here. New articles will arrive automatically."
+                      : "The things you love to read will find a home here."}
               </p>
-              {!data.feeds.length && (
+              {!data.feeds.length && view !== "reading" && (
                 <button onClick={() => setModal("subscribe")}>
                   Add a subscription <ArrowUpRight size={14} />
                 </button>
@@ -1450,14 +1471,20 @@ function App() {
                     }}
                   />
                 </div>
-                {!scope.feed_id && (
-                  <button
-                    className="row-feed"
-                    onMouseEnter={fullOnHover}
-                    onClick={() => stream("all", { feed_id: item.feed_id })}
-                  >
+                {item.feed_id === READING_LIST ? (
+                  <span className="row-feed" onMouseEnter={fullOnHover}>
                     {item.feed_title}
-                  </button>
+                  </span>
+                ) : (
+                  !scope.feed_id && (
+                    <button
+                      className="row-feed"
+                      onMouseEnter={fullOnHover}
+                      onClick={() => stream("all", { feed_id: item.feed_id })}
+                    >
+                      {item.feed_title}
+                    </button>
+                  )
                 )}
                 <button
                   className="row-title"
@@ -1571,11 +1598,15 @@ function App() {
                     }
                   >
                     <i className="hue-dot" />
-                    <button
-                      onClick={() => stream("all", { feed_id: a.feed_id })}
-                    >
-                      {a.feed_title}
-                    </button>
+                    {a.feed_id === READING_LIST ? (
+                      <span>{a.feed_title}</span>
+                    ) : (
+                      <button
+                        onClick={() => stream("all", { feed_id: a.feed_id })}
+                      >
+                        {a.feed_title}
+                      </button>
+                    )}
                     <span className="kicker-sep">·</span>
                     <time dateTime={a.published}>{fullDate(a.published)}</time>
                   </div>
@@ -3105,8 +3136,10 @@ function DataSettings({ data, act, submit }) {
         <p>
           Load the companion extension from the <code>extension</code> directory
           using Chrome’s “Load unpacked”. Set this server’s URL and access token
-          in its options. Its toolbar button subscribes to the current page;
-          Reading List sync runs every minute while Chrome is open.
+          in its options. Its toolbar button subscribes to the current page.
+          While Chrome is open, its Reading List shows under Reading list in the
+          tray: read state syncs both ways within half a minute, and a page
+          removed from the list in Chrome leaves Feedelio too.
         </p>
         <p>
           <strong>Server URL:</strong> <code>{location.origin}</code>

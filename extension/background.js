@@ -60,12 +60,15 @@ async function sync() {
     running = false;
   }
 }
+// Chrome 120+ allows alarms every 30 seconds: how soon a read in Feedelio
+// reaches Chrome.
+const every = { periodInMinutes: 0.5 };
 chrome.runtime.onInstalled.addListener(async () => {
-  await chrome.alarms.create("sync", { periodInMinutes: 1 });
+  await chrome.alarms.create("sync", every);
   await sync();
 });
 chrome.runtime.onStartup.addListener(async () => {
-  await chrome.alarms.create("sync", { periodInMinutes: 1 });
+  await chrome.alarms.create("sync", every);
   await sync();
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -73,6 +76,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.readingList.onEntryAdded.addListener(sync);
 chrome.readingList.onEntryUpdated.addListener(sync);
+chrome.readingList.onEntryRemoved.addListener(sync);
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   if (message.type === "sync") {
     sync().then(() => reply({ ok: true }));

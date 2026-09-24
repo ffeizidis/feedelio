@@ -743,3 +743,45 @@ def test_bookmarked_feeds_narrows_like_all_articles(core, site, web_server):
         expect(page.locator(".article-row")).to_have_count(2)
         expect(page.locator(".article-row", has_text="Story o1")).to_have_count(0)
         browser.close()
+
+
+def test_the_reading_list_has_its_own_view_in_the_tray(core, site, web_server):
+    """The book in the tray lists Chrome's Reading List under each page's
+    website, with no feeds pane, and the pages stay out of All articles."""
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "Real Feed")["id"]
+    core.ingest(feed, "f1", "Feed story", base + "/f1", "<p>Body.</p>")
+    core.chrome_sync(
+        [
+            {
+                "url": "https://www.example.org/a",
+                "title": "Saved page",
+                "hasBeenRead": False,
+                "lastUpdateTime": 1,
+            }
+        ]
+    )
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(web_server)
+        expect(page.locator(".feed-line")).to_have_text([re.compile("Real Feed")])
+        expect(page.locator(".article-row")).to_have_text([re.compile("Feed story")])
+        reading = page.get_by_role("navigation", name="Streams").get_by_role(
+            "button", name="Reading list", exact=True
+        )
+        expect(reading.locator(".badge")).to_have_text("1")
+        reading.click()
+        expect(page).to_have_url(web_server + "/reading")
+        expect(page).to_have_title("feedelio - Reading list")
+        expect(page.locator(".sidebar")).to_have_count(0)
+        row = page.locator(".article-row")
+        expect(row).to_have_count(1)
+        expect(row.locator(".row-feed")).to_have_text("example.org")
+        expect(row.locator("button.row-feed")).to_have_count(0)
+        row.get_by_role("button", name="Mark read: Saved page").click()
+        expect(reading.locator(".badge")).to_have_count(0)
+        page.reload()
+        expect(page.locator(".article-row")).to_have_count(1)
+        browser.close()

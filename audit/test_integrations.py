@@ -122,20 +122,33 @@ def test_real_chromium_extension_reading_list_round_trip(lab, playwright, tmp_pa
             'async url=>{await chrome.readingList.addEntry({url,title:"Real Chrome saved item",hasBeenRead:false})}',
             url,
         )
-        lab.until(lambda: any(a["title"] == "Real Chrome saved item" for a in lab.api("articles")["items"]))
+        lab.until(
+            lambda: any(
+                a["title"] == "Real Chrome saved item" for a in lab.api("articles?view=reading")["items"]
+            )
+        )
         lab.show()
+        # The page shows in the reading list, under its website, not in All articles.
+        assert not lab.api("articles")["items"]
+        lab.page.get_by_role("navigation", name="Streams").get_by_role(
+            "button", name="Reading list", exact=True
+        ).click()
+        expect(lab.page.locator(".article-row .row-feed")).to_have_text("127.0.0.1")
         lab.open_title("Real Chrome saved item")
         # Real browser page opening sets read=true; request sync through the extension's own UI.
-        lab.until(lambda: lab.api("articles")["items"][0]["read"] == 1)
+        lab.until(lambda: lab.api("articles?view=reading")["items"][0]["read"] == 1)
         page.get_by_role("button", name="Save & sync", exact=True).click()
         expect(page.locator("#status")).to_contain_text("Saved. Last sync:", timeout=15000)
         lab.until(
             lambda: worker.evaluate("async url=>(await chrome.readingList.query({url}))[0].hasBeenRead", url)
         )
         worker.evaluate("async url=>{await chrome.readingList.updateEntry({url,hasBeenRead:false})}", url)
-        lab.until(lambda: lab.api("articles")["items"][0]["read"] == 0)
+        lab.until(lambda: lab.api("articles?view=reading")["items"][0]["read"] == 0)
         lab.page.reload()
         expect(lab.page.locator(".article-row.unread")).to_have_count(1)
+        # Removing it in Chrome removes it from the reading list.
+        worker.evaluate("async url=>{await chrome.readingList.removeEntry({url})}", url)
+        lab.until(lambda: not lab.api("articles?view=reading")["items"])
         # Real subscribe deep link opened by the companion's toolbar handler.
         lab.page.goto(
             lab.base

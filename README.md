@@ -79,7 +79,7 @@ All requested areas have an implementation. Integrations that depend on a publis
 | 44–45: habits and data saver | Per-feed read/saved totals, daily open events, reading-time estimates and the archive's size on disk. Images/favicons disabled by default; per-article image loading; audio does not preload and video loads only on click. |
 | 47–49: adding new sources | Companion extension toolbar opens subscription discovery for the current page. RSSHub instance/routes and newsletter-bridge URLs are ordinary subscriptions. CSS story-card and link selectors create a local synthetic stream from a page without a feed. |
 | 50–51: notes and agents | Article + transcript export as Obsidian-compatible Markdown with YAML frontmatter. Stdio MCP exposes indexed search, article retrieval, subscription listing/creation and read/save changes. |
-| 52: Chrome Reading List | Companion extension imports Reading List entries and syncs read state in both directions every minute while Chrome is running. Latest timestamp wins; the extension rechecks Chrome timestamps before applying server changes. Deletions do not propagate. |
+| 52: Chrome Reading List | Companion extension mirrors the Reading List into its own **Reading list** view (the book in the tray), listed under each page's website. Reading-list pages are not subscriptions: they stay out of the feed list, All articles and Bookmarked feeds, but can be saved and appear in History. Read state syncs in both directions every half minute while Chrome is running, and at once on a Chrome change; latest timestamp wins, and the extension rechecks Chrome timestamps before applying server changes. Removing a page from the Reading List removes it from Feedelio. |
 
 ### Integration boundaries
 

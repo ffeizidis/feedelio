@@ -97,6 +97,16 @@ DEFAULTS = dict(
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 # Articles are always read through their feed, so deleted feeds hide their articles.
 ARTICLES = "FROM articles a JOIN feeds f ON f.id=a.feed_id"
+# Chrome's Reading List lives in one hidden feed, shown only in its own view.
+READING_LIST = "chrome"
+
+
+def site_name(url):
+    """A reading-list article's source: the website it is on."""
+    host = urlsplit(url or "").hostname or ""
+    return host.removeprefix("www.") or "Reading list"
+
+
 # What a rule may look at, what it may do, and the article column each action sets.
 RULE_FIELDS = ("title", "body", "url", "author", "tags")
 RULE_ACTIONS = ("read", "star", "tag", "drop", "rewrite")
@@ -467,10 +477,15 @@ class Core:
         return {"ok": True}
 
     def feeds(self):
-        feeds = self.rows("""SELECT f.*,count(CASE WHEN a.read=0 AND a.deleted=0 THEN 1 END) unread,
+        # The reading list is not a subscription: it has its own view instead.
+        feeds = self.rows(
+            """SELECT f.*,count(CASE WHEN a.read=0 AND a.deleted=0 THEN 1 END) unread,
           count(CASE WHEN a.deleted=0 THEN 1 END) total,
           count(CASE WHEN a.deleted=0 AND (EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value IN ('paywall','archive-preview'))) THEN 1 END) partial_items FROM feeds f
-          LEFT JOIN articles a ON a.feed_id=f.id WHERE f.deleted=0 GROUP BY f.id ORDER BY f.title COLLATE NOCASE""")
+          LEFT JOIN articles a ON a.feed_id=f.id WHERE f.deleted=0 AND f.id!=?
+          GROUP BY f.id ORDER BY f.title COLLATE NOCASE""",
+            (READING_LIST,),
+        )
         # One classification for the whole app: the library filter, the sidebar
         # dot and the feed list all read this instead of judging a feed again.
         stale = now(days=-STALE_DAYS)
@@ -497,10 +512,14 @@ class Core:
         for f in folders:
             scope = self.descendants(f["id"])
             f["unread"] = sum(feed["unread"] for feed in feeds if feed["folder_id"] in scope)
-        counts = self.one(f"""SELECT count(*) total,coalesce(sum(a.read=0),0) unread,
+        counts = self.one(
+            f"""SELECT coalesce(sum(f.id!=?),0) total,coalesce(sum(a.read=0 AND f.id!=?),0) unread,
           coalesce(sum(a.starred=1),0) starred,
-          coalesce(sum(a.read=0 AND json_extract(f.options,'$.bookmarked')=1),0) bookmarks
-          {ARTICLES} WHERE a.deleted=0 AND f.deleted=0""")
+          coalesce(sum(a.read=0 AND json_extract(f.options,'$.bookmarked')=1),0) bookmarks,
+          coalesce(sum(a.read=0 AND f.id=?),0) reading
+          {ARTICLES} WHERE a.deleted=0 AND f.deleted=0""",
+            (READING_LIST,) * 3,
+        )
         return dict(
             feeds=feeds,
             folders=folders,
@@ -732,6 +751,13 @@ class Core:
             where.append("EXISTS(SELECT 1 FROM events e WHERE e.article_id=a.id AND e.kind='open')")
         if view == "bookmarks":
             where.append("json_extract(f.options,'$.bookmarked')=1")
+        # Reading-list articles show in their own view, and in Saved and History.
+        if view == "reading":
+            where.append("a.feed_id=?")
+            args.append(READING_LIST)
+        elif view in ("all", "bookmarks"):
+            where.append("a.feed_id!=?")
+            args.append(READING_LIST)
         if tag:
             where.append("EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value=?)")
             args.append(tag)
@@ -770,13 +796,13 @@ class Core:
             tag=tag,
             titles_only=titles_only,
         )
-        if deduplicate and view != "starred":
+        if deduplicate and view not in ("starred", "reading"):
             # A suppressed story must have an earlier surviving match. Evaluate
             # visibility at read time so delete, purge, undo and old backups all
             # work without rewriting user state or maintaining duplicate flags.
             where += """ AND (a.duplicate=0 OR NOT EXISTS(
                 SELECT 1 FROM articles b JOIN feeds bf ON bf.id=b.feed_id
-                WHERE b.deleted=0 AND bf.deleted=0 AND b.feed_id!=a.feed_id
+                WHERE b.deleted=0 AND bf.deleted=0 AND b.feed_id!=a.feed_id AND b.feed_id!='chrome'
                 AND (b.added<a.added OR (b.added=a.added AND b.id<a.id))
                 AND title_similarity(a.title,b.title)>=94))"""
         order = (
@@ -793,6 +819,9 @@ class Core:
           {ARTICLES} WHERE {where} ORDER BY {order},a.id LIMIT ? OFFSET ?""",
             [*args, max(1, min(int(limit), 300)), max(0, int(offset))],
         )
+        for a in items:
+            if a["feed_id"] == READING_LIST:
+                a["feed_title"] = site_name(a["url"])
         return {"items": items, "total": counts["n"], "unread": counts["unread"]}
 
     def article(self, id):
@@ -811,6 +840,8 @@ class Core:
             (id,),
         )
         a.pop("options")
+        if a["feed_id"] == READING_LIST:
+            a["feed_title"] = site_name(a["url"])
         return a
 
     def _undo(self, label, snapshots):
@@ -2151,7 +2182,7 @@ class Core:
         )
 
     def chrome_sync(self, entries):
-        feed_id = "chrome"
+        feed_id = READING_LIST
         with self.db:
             self.db.execute(
                 "INSERT OR IGNORE INTO feeds(id,url,title,folder_id,created) VALUES('chrome','chrome:reading-list','Chrome Reading List','inbox',?)",
@@ -2170,6 +2201,8 @@ class Core:
             # is resent every minute.
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
+                # Added back to Chrome after it was removed there.
+                self.db.execute("UPDATE articles SET deleted=0 WHERE id=?", (id,))
                 a = self.one(
                     "SELECT read,read_at,state_changed,body='' empty FROM articles WHERE id=?", (id,)
                 )
@@ -2194,6 +2227,16 @@ class Core:
                 ):
                     self._enqueue("extract", {"article_id": id})
             result.append({"url": url, "hasBeenRead": bool(a["read"])})
+        # The extension sends the whole list, so what is gone was removed in Chrome.
+        kept = [e["url"] for e in entries]
+        with self.db:
+            gone = self.rows(
+                "SELECT id,guid FROM articles WHERE feed_id=? AND deleted=0 AND guid NOT IN (SELECT value FROM json_each(?))",
+                (feed_id, json.dumps(kept)),
+            )
+            for a in gone:
+                self.db.execute("UPDATE articles SET deleted=1 WHERE id=?", (a["id"],))
+                self.db.execute("DELETE FROM chrome_state WHERE url=?", (a["guid"],))
         return {"entries": result}
 
     def execute(self, action, payload):

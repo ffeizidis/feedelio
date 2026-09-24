@@ -322,7 +322,7 @@ def test_saved_pages_sharing_a_title_stay_separate(core, site):
         for host, read in (("one", False), ("two", True))
     ]
     core.chrome_sync(entries)
-    items = core.articles(deduplicate=False)["items"]
+    items = core.articles(view="reading", deduplicate=False)["items"]
     assert sorted(a["url"] for a in items) == ["https://one.example/", "https://two.example/"]
     assert [a["hasBeenRead"] for a in core.chrome_sync(entries)["entries"]] == [False, True]
 
@@ -336,13 +336,55 @@ def test_chrome_read_state_conflicts_and_undo(core, site):
         "lastUpdateTime": timestamp,
     }
     core.chrome_sync([entry])
-    a = core.articles()["items"][0]
+    a = core.articles(view="reading")["items"][0]
     result = core.change_articles([a["id"]], read=True)
     assert core.chrome_sync([entry])["entries"][0]["hasBeenRead"]
     core.undo(result["undo"])
     assert not core.chrome_sync([entry])["entries"][0]["hasBeenRead"]
     entry.update(lastUpdateTime=int(datetime.now(timezone.utc).timestamp() * 1000) + 30000, hasBeenRead=True)
     assert core.chrome_sync([entry])["entries"][0]["hasBeenRead"]
+
+
+def test_the_reading_list_is_a_view_of_its_own(core, site):
+    # Reading-list pages are not subscriptions: no feed in the list, nothing in
+    # All articles, and each is listed under the website it is on.
+    feed = core.subscribe(site[0] + "/rss", "inbox", "Real Feed")["id"]
+    core.ingest(feed, "f1", "Feed story", site[0] + "/f1", "<p>Body.</p>")
+    entries = [
+        {
+            "url": "https://www.example.org/a",
+            "title": "Saved page",
+            "hasBeenRead": False,
+            "lastUpdateTime": 1,
+        },
+        {"url": "https://news.example.net/b", "title": "Read page", "hasBeenRead": True, "lastUpdateTime": 1},
+    ]
+    core.chrome_sync(entries)
+    overview = core.overview()
+    assert [f["title"] for f in overview["feeds"]] == ["Real Feed"]
+    assert overview["counts"]["unread"] == 1 and overview["counts"]["reading"] == 1
+    assert [a["title"] for a in core.articles()["items"]] == ["Feed story"]
+    assert core.articles(folder_id="inbox")["total"] == 1
+    reading = core.articles(view="reading")["items"]
+    assert {a["title"]: a["feed_title"] for a in reading} == {
+        "Saved page": "example.org",
+        "Read page": "news.example.net",
+    }
+    assert core.article(reading[0]["id"])["feed_title"] in ("example.org", "news.example.net")
+    # Saved and History are about articles, so a starred page shows in Saved.
+    core.change_articles([reading[0]["id"]], starred=True)
+    assert core.articles(view="starred")["total"] == 1
+    # Marking all read in the view touches the reading list only.
+    core.mark_all(view="reading")
+    assert core.overview()["counts"] == {**core.overview()["counts"], "unread": 1, "reading": 0}
+    assert all(e["hasBeenRead"] for e in core.chrome_sync(entries)["entries"])
+
+    # Removed in Chrome: gone from the view. Added back: there again.
+    core.chrome_sync(entries[:1])
+    assert [a["title"] for a in core.articles(view="reading")["items"]] == ["Saved page"]
+    back = {**entries[1], "hasBeenRead": False, "lastUpdateTime": 2}
+    core.chrome_sync([entries[0], back])
+    assert core.articles(view="reading", unread=True)["total"] == 1
 
 
 def test_feed_health_is_decided_once_for_the_whole_app(core, site):

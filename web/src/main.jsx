@@ -21,7 +21,6 @@ import {
   CheckCheck,
   Settings2,
   Folder,
-  FolderPlus,
   X,
   ExternalLink,
   BookOpen,
@@ -90,6 +89,8 @@ try {
 }
 // The address names the page, so a reload or a shared link lands on the same
 // stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /history, /a/<article>.
+// Width of the always-visible tray at the far left, matching --tray-width.
+const TRAY_WIDTH = 64;
 const LIBRARY_TABS = [
   "feeds",
   "folders",
@@ -862,7 +863,7 @@ function App() {
           300,
           Math.min(
             1000,
-            viewport - sidebarSize - readerMin,
+            viewport - railSize - readerMin,
             listSize + (e.key === "[" ? -20 : 20),
           ),
         );
@@ -957,13 +958,17 @@ function App() {
   const archive =
     activeFeed &&
     (data.backfills || []).find((j) => j.payload.feed_id === activeFeed.id);
+  // The feeds pane belongs to the streams a feed list can narrow; the tray
+  // to its left is always there.
+  const paneShown = view === "all" || !!scope.feed_id || !!scope.folder_id;
   const sidebarSize = Math.max(
     180,
     Math.min(
       paneWidth ?? settings.sidebar_width ?? 252,
-      Math.max(180, viewport - 680),
+      Math.max(180, viewport - TRAY_WIDTH - 680),
     ),
   );
+  const railSize = TRAY_WIDTH + (paneShown ? sidebarSize : 0);
   // The reader is what the other two panes are for, so it keeps enough room
   // for a readable measure and the list gives way first.
   const readerMin = Math.round(Math.min(560, Math.max(380, viewport * 0.36)));
@@ -971,7 +976,7 @@ function App() {
     300,
     Math.min(
       listWidth ?? settings.list_width ?? 590,
-      Math.max(300, viewport - sidebarSize - readerMin),
+      Math.max(300, viewport - railSize - readerMin),
     ),
   );
   // Unread-only hides caught-up feeds and folders, but never the one being read.
@@ -1052,98 +1057,127 @@ function App() {
         </React.Fragment>
       ));
 
+  // The tray works from the library screen too: it leaves the library first.
+  const libraryOpen = LIBRARY_TABS.includes(modal);
+  const leave = (fn) => () => {
+    if (modal) setModal(null);
+    fn();
+  };
+  const trayButton = ([id, Icon, label, onClick, active, badge]) => (
+    <button
+      key={id}
+      className={active ? "active" : ""}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      title={label}
+      onClick={leave(onClick)}
+    >
+      <Icon size={22} />
+      {badge > 0 && (
+        <span className="badge" data-unread={badge}>
+          {badge > 999 ? "999+" : badge}
+        </span>
+      )}
+    </button>
+  );
+  const onStream = (id) => view === id && !searchOpen && !libraryOpen;
+  const tray = (
+    <nav className="tray" aria-label="Streams">
+      <a className="brand" href="/" aria-label="Feedelio home" title="Feedelio">
+        <span
+          className={
+            settings.wordmark === "plain" ? "plain-wordmark" : "script-f"
+          }
+        >
+          f
+        </span>
+      </a>
+      {[
+        [
+          "all",
+          Inbox,
+          "All articles",
+          () => stream("all"),
+          onStream("all"),
+          data.counts.unread,
+        ],
+        [
+          "starred",
+          Star,
+          "Saved",
+          () => stream("starred"),
+          onStream("starred"),
+        ],
+        [
+          "bookmarks",
+          Bookmark,
+          "Bookmarked feeds",
+          () => stream("bookmarks"),
+          onStream("bookmarks"),
+        ],
+        [
+          "history",
+          Clock3,
+          "History",
+          () => stream("history"),
+          onStream("history"),
+        ],
+      ].map(trayButton)}
+      <span className="tray-gap" />
+      {[
+        [
+          "manage",
+          Settings2,
+          "Manage library",
+          () => setModal("feeds"),
+          libraryOpen,
+        ],
+        [
+          "search",
+          Search,
+          "Search",
+          () => {
+            setSearchOpen(true);
+            searchRef.current?.focus();
+          },
+          searchOpen && !libraryOpen,
+        ],
+        [
+          "subscribe",
+          Plus,
+          "Add a subscription",
+          () => setModal("subscribe"),
+          modal === "subscribe",
+        ],
+      ].map(trayButton)}
+    </nav>
+  );
+
   return (
     <main
-      className="shell"
+      className={"shell" + (paneShown ? "" : " no-pane")}
       style={{
         "--sidebar-width": sidebarSize + "px",
         "--list-width": listSize + "px",
       }}
     >
-      <aside className="sidebar" aria-label="Library">
-        <header className="brand">
-          <a href="/" aria-label="Feedelio home">
-            <span
-              className={
-                settings.wordmark === "plain" ? "plain-wordmark" : "script-f"
-              }
-            >
-              f
-            </span>
-            <span className="wordmark-rest">eedelio</span>
-          </a>
-          <span className="private-label">
-            <ShieldCheck size={12} /> JUST FOR YOU
-          </span>
-        </header>
-        <div className="library-controls">
-          <button
-            className="search-trigger"
-            onClick={() => setSearchOpen(true)}
-          >
-            Search <span>/</span>
-          </button>
-          <nav className="views" aria-label="Streams">
-            {[
-              ["all", Inbox, "All articles", data.counts.unread],
-              ["starred", Star, "Saved", data.counts.starred],
-              [
-                "bookmarks",
-                Bookmark,
-                "Bookmarked feeds",
-                data.counts.bookmarks,
-              ],
-              ["history", Clock3, "History", null],
-            ].map(([id, Icon, label, n]) => (
-              <button
-                key={id}
-                className={
-                  view === id && !scope.feed_id && !scope.folder_id
-                    ? "active"
-                    : ""
-                }
-                onClick={() => stream(id)}
-              >
-                <Icon size={16} />
-                <span>{label}</span>
-                {n !== null && (
-                  <span className="pill" data-unread={n}>
-                    {n}
-                  </span>
-                )}
-              </button>
-            ))}
-            <button onClick={() => setModal("feeds")}>
-              <Settings2 size={16} />
-              <span>Manage library</span>
-            </button>
-          </nav>
+      {tray}
+      {paneShown && (
+        <aside className="sidebar" aria-label="Feeds">
           <div className="subscriptions-heading">
             <h2>FEEDS</h2>
-            <div>
-              <IconButton
-                icon={settings.sidebar_unread_only ? EyeOff : Eye}
-                label={
-                  settings.sidebar_unread_only
-                    ? "Show all feeds"
-                    : "Show only feeds with unread articles"
-                }
-                aria-pressed={!!settings.sidebar_unread_only}
-                onClick={() =>
-                  pref("sidebar_unread_only", !settings.sidebar_unread_only)
-                }
-              />
-              <IconButton
-                icon={FolderPlus}
-                label="New folder"
-                onClick={() => setModal("new-folder")}
-              />
-              <IconButton
-                icon={Plus}
-                label="Add a subscription"
-                onClick={() => setModal("subscribe")}
-              />
-            </div>
+            <IconButton
+              icon={settings.sidebar_unread_only ? EyeOff : Eye}
+              label={
+                settings.sidebar_unread_only
+                  ? "Show all feeds"
+                  : "Show only feeds with unread articles"
+              }
+              aria-pressed={!!settings.sidebar_unread_only}
+              onClick={() =>
+                pref("sidebar_unread_only", !settings.sidebar_unread_only)
+              }
+            />
           </div>
           <div className="folder-tree" onScroll={showScrollbar}>
             {data.feeds.length ? (
@@ -1157,20 +1191,23 @@ function App() {
               </button>
             )}
           </div>
-        </div>
-      </aside>
+        </aside>
+      )}
       <section className="stream-pane" aria-label="Article stream">
-        <ResizeHandle
-          label="Resize feeds pane"
-          value={sidebarSize}
-          min={180}
-          max={Math.min(600, viewport - 300 - readerMin)}
-          onChange={setPaneWidth}
-          onSave={(v) => {
-            setPaneWidth(v);
-            pref("sidebar_width", v);
-          }}
-        />
+        {paneShown && (
+          <ResizeHandle
+            label="Resize feeds pane"
+            value={sidebarSize}
+            min={180}
+            max={Math.min(600, viewport - TRAY_WIDTH - 300 - readerMin)}
+            start={TRAY_WIDTH}
+            onChange={setPaneWidth}
+            onSave={(v) => {
+              setPaneWidth(v);
+              pref("sidebar_width", v);
+            }}
+          />
+        )}
         <div className="list-heading">
           {searchOpen ? (
             <div className="search-prompt">
@@ -1439,8 +1476,8 @@ function App() {
           label="Resize article list"
           value={listSize}
           min={300}
-          max={Math.min(1000, viewport - sidebarSize - readerMin)}
-          start={sidebarSize}
+          max={Math.min(1000, viewport - railSize - readerMin)}
+          start={railSize}
           onChange={setListWidth}
           onSave={(v) => {
             setListWidth(v);
@@ -1703,15 +1740,6 @@ function App() {
       {modal === "subscribe" && (
         <Subscribe data={data} act={act} onClose={() => setModal(null)} />
       )}
-      {modal === "new-folder" && (
-        <FolderSheet
-          data={data}
-          act={act}
-          onClose={() => setModal(null)}
-          Modal={Modal}
-          Field={Field}
-        />
-      )}
       {modal === "filter" && a && (
         <RuleSheet
           data={data}
@@ -1779,6 +1807,7 @@ function App() {
             setManageFolder(null);
           }}
           onSubscribe={() => setModal("subscribe")}
+          tray={tray}
         />
       )}
     </main>
@@ -2025,6 +2054,7 @@ function Library({
   pref,
   onClose,
   onSubscribe,
+  tray,
 }) {
   const [tab, setTab] = useState(initial),
     [ids, setIds] = useState([]),
@@ -2093,10 +2123,8 @@ function Library({
         onClose();
       }}
     >
+      {tray}
       <aside className="settings-sidebar">
-        <button className="back-to-reading" onClick={onClose}>
-          ← All articles
-        </button>
         <h2 className="section-label">Manage library</h2>
         <nav className="dialog-tabs" aria-label="Library settings">
           {Object.entries(settingsSections)

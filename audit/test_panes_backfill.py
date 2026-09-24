@@ -15,7 +15,7 @@ def test_right_pane_streams_scroll_resize_and_persist_display(lab, viewport_widt
         assert sidebar["y"] == divider["y"] == reader["y"] == 0
         assert sidebar["height"] == divider["height"] == reader["height"] == 1000
         assert abs(divider["x"] + 1 - (sidebar["x"] + sidebar["width"])) < 1
-        assert abs(listing["x"] - sidebar["width"]) < 1
+        assert abs(listing["x"] - sidebar["x"] - sidebar["width"]) < 1
         assert abs(reader["x"] - listing["x"] - listing["width"]) < 1
         assert abs(reader["x"] + reader["width"] - viewport_width) < 1
 

@@ -223,6 +223,9 @@ def test_desktop_reading_workflow(core, site, web_server):
         page.get_by_role("button", name="Bookmarked feeds").click()
         expect(page).to_have_title("feedelio - Bookmarked feeds")
         expect(page.locator(".article-row")).to_have_count(3)
+        # Bookmarked feeds has no feed list; All articles brings it back.
+        expect(page.locator(".sidebar")).to_have_count(0)
+        page.get_by_role("button", name="All articles", exact=True).click()
         page.locator(".feed-line", has_text="The Sunday Journal").click()
         # Update now queues one refresh and stays busy until the worker takes it
         # (the subscription's own initial refresh is still queued: no worker here).
@@ -282,7 +285,8 @@ def test_desktop_reading_workflow(core, site, web_server):
         expect(page.get_by_role("button", name="Expand Ideas & culture")).to_be_visible()
         page.get_by_role("button", name="Expand Ideas & culture").click()
         expect(page.locator(".feed-line")).to_have_count(1)
-        # Desktop-only shell retains three panes at 200% zoom, with horizontal scrolling.
+        # Desktop-only shell keeps the tray and three panes at 200% zoom, with
+        # horizontal scrolling.
         page.locator(".article-row .row-title").first.click()
         page.evaluate("document.documentElement.style.zoom='2'")
         expect(page.locator(".prose")).to_be_visible()
@@ -290,7 +294,7 @@ def test_desktop_reading_workflow(core, site, web_server):
             page.locator(".shell").evaluate(
                 '(el)=>getComputedStyle(el).gridTemplateColumns.split(" ").length'
             )
-            == 3
+            == 4
         )
         assert not errors, errors
         browser.close()
@@ -624,8 +628,8 @@ def test_middle_clicking_a_title_opens_the_original_in_a_new_tab(core, site, web
 
 
 def test_only_the_feed_list_scrolls_in_the_sidebar(core, site, web_server):
-    """Search, the views and the FEEDS heading stay put while a long feed list
-    scrolls, and its scrollbar only shows while it is being scrolled."""
+    """The tray and the FEEDS heading stay put while a long feed list scrolls,
+    and its scrollbar only shows while it is being scrolled."""
     base, _, _ = site
     for n in range(40):
         core.subscribe(f"{base}/rss?n={n}", "inbox", f"Feed number {n}")
@@ -647,6 +651,59 @@ def test_only_the_feed_list_scrolls_in_the_sidebar(core, site, web_server):
         assert tree.evaluate("e => e.scrollTop") > 0
         assert page.get_by_role("navigation", name="Streams").bounding_box() == views
         assert page.get_by_role("heading", name="FEEDS").bounding_box() == heading
-        assert page.locator(".library-controls").evaluate("e => e.scrollTop") == 0
+        assert page.locator(".sidebar").evaluate("e => e.scrollTop") == 0
         expect(tree).not_to_have_class(re.compile("scrolling"), timeout=3000)
+        browser.close()
+
+
+def test_the_tray_is_always_there_and_the_feeds_pane_only_with_feed_lists(core, site, web_server):
+    """The tray at the far left holds the streams, the library, search and a new
+    feed; the feeds pane shows only for streams a feed list can narrow."""
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "The Sunday Journal")["id"]
+    core.ingest(feed, "one", "Finding beauty in the everyday", base + "/one", "<p>Body.</p>")
+    core.ingest(feed, "two", "A second story", base + "/two", "<p>Body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(web_server)
+        tray = page.get_by_role("navigation", name="Streams")
+        expect(tray.locator(".badge")).to_have_text("2")
+        assert tray.bounding_box()["x"] == 0
+        pane = page.locator(".sidebar")
+        expect(pane.get_by_role("heading", name="FEEDS")).to_be_visible()
+        # Folders and subscriptions are added from the tray and the library.
+        expect(pane.get_by_role("button", name="New folder")).to_have_count(0)
+        expect(pane.get_by_role("button", name="Add a subscription")).to_have_count(0)
+
+        for name in ("Saved", "Bookmarked feeds", "History"):
+            tray.get_by_role("button", name=name, exact=True).click()
+            expect(tray.get_by_role("button", name=name, exact=True)).to_have_attribute(
+                "aria-current", "page"
+            )
+            expect(pane).to_have_count(0)
+        tray.get_by_role("button", name="All articles", exact=True).click()
+        expect(pane).to_be_visible()
+        pane.locator(".feed-line", has_text="The Sunday Journal").click()
+        expect(pane).to_be_visible()
+
+        tray.get_by_role("button", name="Search", exact=True).click()
+        expect(page.get_by_role("textbox", name="Search articles")).to_be_focused()
+        page.keyboard.press("Escape")
+        tray.get_by_role("button", name="Add a subscription", exact=True).click()
+        expect(page.get_by_role("dialog")).to_be_visible()
+        page.keyboard.press("Escape")
+
+        # The library screen keeps the tray, and the tray leaves the library.
+        tray.get_by_role("button", name="Manage library", exact=True).click()
+        library = page.get_by_role("dialog", name="Manage library")
+        library_tray = library.get_by_role("navigation", name="Streams")
+        expect(library_tray.get_by_role("button", name="Manage library")).to_have_attribute(
+            "aria-current", "page"
+        )
+        assert library_tray.bounding_box()["x"] == 0
+        library_tray.get_by_role("button", name="Saved", exact=True).click()
+        expect(library).to_have_count(0)
+        expect(page).to_have_title("feedelio - Saved for later")
         browser.close()

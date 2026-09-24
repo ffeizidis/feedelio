@@ -572,3 +572,81 @@ def test_an_article_starts_a_filter_filled_in_from_itself(core, site, web_server
     assert rule["field"] == "title" and rule["action"] == "read"
     assert rule["feed_id"] == feed and not rule["is_regex"]
     assert rule["pattern"] == "Sponsored: win a (free) trip?"
+
+
+def test_a_feed_is_unsubscribed_from_its_settings(core, site, web_server):
+    """The feed's own settings page can unsubscribe, after asking, and the
+    stream that showed the feed goes back to all articles."""
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "The Sunday Journal")["id"]
+    core.ingest(feed, "one", "Finding beauty in the everyday", base + "/one", "<p>Body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(web_server + "/f/" + feed)
+        page.get_by_role("button", name="Manage feed: The Sunday Journal").click()
+        unsubscribe = page.get_by_role("button", name="Unsubscribe", exact=True)
+
+        page.once("dialog", lambda d: d.dismiss())
+        unsubscribe.click()
+        expect(unsubscribe).to_be_visible()
+        assert [f["id"] for f in core.feeds()] == [feed]
+
+        page.once("dialog", lambda d: d.accept())
+        unsubscribe.click()
+        expect(page.get_by_text("Unsubscribed · Z to undo")).to_be_visible()
+        expect(unsubscribe).to_have_count(0)
+        page.get_by_role("button", name="Close library").click()
+        expect(page.get_by_role("heading", level=1)).not_to_have_text("The Sunday Journal")
+        expect(page).not_to_have_url(re.compile("/f/"))
+        browser.close()
+
+    assert core.feeds() == []
+
+
+def test_middle_clicking_a_title_opens_the_original_in_a_new_tab(core, site, web_server):
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "The Sunday Journal")["id"]
+    core.ingest(feed, "one", "Finding beauty in the everyday", base + "/one", "<p>Body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(web_server)
+        with page.context.expect_page() as opened:
+            page.locator(".row-title").click(button="middle")
+        assert opened.value.url == base + "/one"
+        # The list stays as it was: nothing opened in the reader, nothing read.
+        expect(page.locator(".reading-content h1")).to_have_count(0)
+        expect(page.locator(".article-row.unread")).to_have_count(1)
+        browser.close()
+
+
+def test_only_the_feed_list_scrolls_in_the_sidebar(core, site, web_server):
+    """Search, the views and the FEEDS heading stay put while a long feed list
+    scrolls, and its scrollbar only shows while it is being scrolled."""
+    base, _, _ = site
+    for n in range(40):
+        core.subscribe(f"{base}/rss?n={n}", "inbox", f"Feed number {n}")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 700})
+        page.goto(web_server)
+        tree = page.locator(".folder-tree")
+        expect(tree.get_by_text("Feed number 0", exact=True)).to_be_visible()
+        views = page.get_by_role("navigation", name="Streams").bounding_box()
+        heading = page.get_by_role("heading", name="FEEDS").bounding_box()
+        hidden = "rgba(0, 0, 0, 0) rgba(0, 0, 0, 0)"
+        assert tree.evaluate("e => getComputedStyle(e).scrollbarColor") == hidden
+
+        tree.hover()
+        page.mouse.wheel(0, 800)
+        expect(tree).to_have_class(re.compile("scrolling"))
+        assert tree.evaluate("e => e.scrollTop") > 0
+        assert page.get_by_role("navigation", name="Streams").bounding_box() == views
+        assert page.get_by_role("heading", name="FEEDS").bounding_box() == heading
+        assert page.locator(".library-controls").evaluate("e => e.scrollTop") == 0
+        expect(tree).not_to_have_class(re.compile("scrolling"), timeout=3000)
+        browser.close()

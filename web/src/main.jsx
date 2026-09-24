@@ -152,6 +152,13 @@ async function api(path, body) {
 const cmd = (name, payload = {}) => api("actions/" + name, { payload });
 // A publisher's page always opens disowned, in its own tab.
 const openExternal = (url) => window.open(url, "_blank", "noopener,noreferrer");
+// The feed list's scrollbar shows only while it is being scrolled.
+const showScrollbar = (e) => {
+  const el = e.currentTarget;
+  el.classList.add("scrolling");
+  clearTimeout(el.scrollingTimer);
+  el.scrollingTimer = setTimeout(() => el.classList.remove("scrolling"), 900);
+};
 // Queue an update: one feed when given, the whole library otherwise.
 const refreshJob = (feedId) => [
   "enqueue",
@@ -629,6 +636,15 @@ function App() {
       if (!scope.feed_id && !scope.folder_id) setScope({ feed_id: a.feed_id });
     }
   }, [a]);
+  // Unsubscribing from the feed on screen returns to all articles.
+  useEffect(() => {
+    if (
+      data &&
+      scope.feed_id &&
+      !data.feeds.some((f) => f.id === scope.feed_id)
+    )
+      setScope({});
+  }, [data, scope.feed_id]);
   // The hide-read preference can arrive after the first keypress. Reset on the
   // user's toggle, not on its asynchronous response, so it cannot erase history.
   const navigationKey = JSON.stringify([
@@ -1129,7 +1145,7 @@ function App() {
               />
             </div>
           </div>
-          <div className="folder-tree">
+          <div className="folder-tree" onScroll={showScrollbar}>
             {data.feeds.length ? (
               folderTree()
             ) : (
@@ -1369,6 +1385,13 @@ function App() {
                   className="row-title"
                   onMouseEnter={fullOnHover}
                   onClick={() => openTitle(item)}
+                  // Middle click opens the original in a new tab, like a link.
+                  onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+                  onAuxClick={(e) => {
+                    if (e.button !== 1 || !item.url) return;
+                    e.preventDefault();
+                    openExternal(item.url);
+                  }}
                 >
                   <ArticleMarks item={item} />
                   <Highlight text={item.title} query={q} />
@@ -2685,17 +2708,38 @@ function FeedEditor({ feed: f, data, act, onBack }) {
       <div className="form-actions">
         <button
           type="button"
-          onClick={() =>
-            act(
-              "enqueue",
-              { kind: "backfill", payload: { feed_id: f.id } },
-              "Archive backfill queued",
-            ).catch(() => {})
-          }
+          className="button danger-button"
+          onClick={async () => {
+            if (!confirm(`Unsubscribe from ${f.title}? You can undo this.`))
+              return;
+            const done = await submit(() =>
+              act(
+                "bulk_feeds",
+                { ids: [f.id], action: "delete" },
+                "Unsubscribed · Z to undo",
+              ),
+            );
+            if (done) onBack();
+          }}
         >
-          Backfill archive
+          <Trash2 size={16} />
+          Unsubscribe
         </button>
-        <button className="primary">Save feed settings</button>
+        <div className="action-pair">
+          <button
+            type="button"
+            onClick={() =>
+              act(
+                "enqueue",
+                { kind: "backfill", payload: { feed_id: f.id } },
+                "Archive backfill queued",
+              ).catch(() => {})
+            }
+          >
+            Backfill archive
+          </button>
+          <button className="primary">Save feed settings</button>
+        </div>
       </div>
       <p className="muted">
         Last checked:{" "}

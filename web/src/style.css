@@ -739,11 +739,15 @@ dialog::backdrop {
 .private-label {
   display: none;
 }
+/* Search, views and the FEEDS heading stay put; only the feed list scrolls. */
 .library-controls {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+}
+.library-controls > * {
+  flex-shrink: 0;
 }
 .search-trigger {
   margin-top: var(--space-5);
@@ -817,8 +821,20 @@ dialog::backdrop {
   width: 16px;
   height: 16px;
 }
-.folder-tree {
-  margin-top: var(--space-3);
+.library-controls > .folder-tree {
+  flex: 1 1 0;
+  min-height: 0;
+  /* Reach into the sidebar's right padding: counts line up with the views
+     above, and the scrollbar keeps a clear gap from them. */
+  margin: var(--space-3) calc(-1 * var(--space-4)) 0 0;
+  padding-right: var(--space-3);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  scrollbar-color: transparent transparent;
+}
+.folder-tree.scrolling {
+  scrollbar-color: var(--faint) transparent;
 }
 .folder-line {
   display: flex;

@@ -46,6 +46,7 @@ import {
   Lock,
   Smartphone,
   Video,
+  Podcast,
   Eye,
   EyeOff,
   Bookmark,
@@ -315,11 +316,12 @@ function ArticleMarks({ item }) {
   const short =
     item.tags.includes("short") || /youtube\.com\/shorts\//.test(url);
   const paywall = item.tags.includes("paywall");
-  if (!video && !paywall) return null;
+  if (!video && !item.audio && !paywall) return null;
   return (
     <span className="row-marks">
       {video && short && <Smartphone size={15} aria-label="YouTube Short" />}
       {video && !short && <Video size={15} aria-label="Video" />}
+      {!video && !!item.audio && <Podcast size={15} aria-label="Podcast" />}
       {paywall && <Lock size={15} aria-label="Paywalled" />}
     </span>
   );
@@ -843,14 +845,23 @@ function App() {
         setModal(null);
         return;
       }
+      const editing = ["INPUT", "TEXTAREA", "SELECT"].includes(
+        e.target.tagName,
+      );
+      // Ctrl+Z (Cmd+Z) undoes the last change, like z, outside text fields.
       if (
-        modal ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) ||
-        e.metaKey ||
-        e.ctrlKey ||
-        e.altKey
-      )
+        (e.ctrlKey || e.metaKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "z" &&
+        !modal &&
+        !editing
+      ) {
+        e.preventDefault();
+        run("undo", {}, "Last change undone");
         return;
+      }
+      if (modal || editing || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = items.find((x) => x.id === focused) || a;
       if (goKey.current && Date.now() - goKey.current < 1500) {
         goKey.current = 0;
@@ -2679,6 +2690,7 @@ function FeedEditor({ feed: f, data, act, onBack }) {
             archive: p.archive === "on",
             bookmarked: p.bookmarked === "on",
             extract: p.extract === "on",
+            mark_read: p.mark_read === "on",
             selector: p.selector,
             user_agent: p.user_agent,
             cookie: p.cookie,
@@ -2793,6 +2805,14 @@ function FeedEditor({ feed: f, data, act, onBack }) {
           defaultChecked={f.options.extract ?? data.settings.extract_articles}
         />
         <span>Automatically fetch full articles</span>
+      </label>
+      <label className="check-field">
+        <input
+          type="checkbox"
+          name="mark_read"
+          defaultChecked={f.options.mark_read}
+        />
+        <span>Mark new articles as read</span>
       </label>
       <hr />
       <div className="form-grid">

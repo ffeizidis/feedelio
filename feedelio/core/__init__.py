@@ -97,6 +97,11 @@ DEFAULTS = dict(
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
 # Articles are always read through their feed, so deleted feeds hide their articles.
 ARTICLES = "FROM articles a JOIN feeds f ON f.id=a.feed_id"
+# An enclosure without a type is still audio when its file says so.
+AUDIO_LINK = " OR ".join(
+    f"lower(json_extract(e.value,'$.href')) LIKE '%.{ext}%'"
+    for ext in ("mp3", "m4a", "aac", "ogg", "opus", "wav")
+)
 # Chrome's Reading List lives in one hidden feed, shown only in its own view.
 READING_LIST = "chrome"
 
@@ -646,6 +651,7 @@ class Core:
             "retention_days",
             "transcript_selector",
             "bookmarked",
+            "mark_read",
         }
         if set(options) - allowed:
             raise ValueError("Unknown feed option.")
@@ -658,7 +664,7 @@ class Core:
             isinstance(days, bool) or not isinstance(days, (int, float)) or not 0 <= days <= 36500
         ):
             raise ValueError("Feed retention must be 0–36500 days, or null for the global setting.")
-        for key in ("archive", "extract", "bookmarked"):
+        for key in ("archive", "extract", "bookmarked", "mark_read"):
             if key in options and not isinstance(options[key], bool):
                 raise ValueError(f"{key} must be a boolean.")
         for key in ("selector", "scrape_selector", "scrape_link", "transcript_selector"):
@@ -815,7 +821,9 @@ class Core:
         )
         items = self.rows(
             f"""SELECT a.id,a.feed_id,a.title,a.url,a.author,a.published,a.read,a.starred,
-          a.read_at,a.words,a.tags,a.duplicate,substr(a.text,1,190) excerpt,f.title feed_title,f.folder_id
+          a.read_at,a.words,a.tags,a.duplicate,substr(a.text,1,190) excerpt,f.title feed_title,f.folder_id,
+          EXISTS(SELECT 1 FROM json_each(a.enclosures) e WHERE json_extract(e.value,'$.type') LIKE 'audio/%'
+            OR {AUDIO_LINK}) audio
           {ARTICLES} WHERE {where} ORDER BY {order},a.id LIMIT ? OFFSET ?""",
             [*args, max(1, min(int(limit), 300)), max(0, int(offset))],
         )
@@ -1166,6 +1174,9 @@ class Core:
                     "deleted url published enclosures transcript duration".split(),
                 )
             return a["id"]
+        # A feed set to arrive read keeps its articles without asking for attention.
+        feed = self.db.execute("SELECT options FROM feeds WHERE id=?", (feed_id,)).fetchone()
+        read = read or bool(feed and json.loads(feed["options"]).get("mark_read"))
         a = dict(
             id=uid(),
             feed_id=feed_id,

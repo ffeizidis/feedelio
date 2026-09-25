@@ -715,6 +715,8 @@ dialog::backdrop {
 /* ---------------------------------------------------------------- Tray */
 /* Always visible at the far left: streams, the library, search, a new feed. */
 .tray {
+  position: relative;
+  z-index: calc(var(--z-divider) + 1);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -723,8 +725,6 @@ dialog::backdrop {
   padding: var(--space-4) 0;
   background: var(--raised-2);
   border-right: 1px solid var(--line);
-  overflow-y: auto;
-  scrollbar-width: none;
 }
 .tray .brand {
   display: grid;
@@ -758,19 +758,19 @@ dialog::backdrop {
   color: var(--ink);
   background: var(--raised);
 }
+/* The chosen stream is a bookmark tab: the pane's ground, running into the
+   pane over the dividing line. */
 .tray button.active {
+  align-self: stretch;
+  width: auto;
+  margin: 0 -1px 0 10px;
+  padding-right: 10px;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
   color: var(--accent);
-  background: var(--accent-wash);
+  background: var(--ground);
 }
-.tray button.active::before {
-  content: "";
-  position: absolute;
-  left: -10px;
-  top: 10px;
-  bottom: 10px;
-  width: 3px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
+.tray button.active .badge {
+  border-color: var(--ground);
 }
 .tray svg {
   width: 22px;

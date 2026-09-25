@@ -1,5 +1,6 @@
 """Desktop acceptance test against the built React app and the real API."""
 
+import json
 import re
 import socket
 import threading
@@ -836,3 +837,40 @@ def test_podcasts_are_marked_ctrl_z_undoes_and_a_feed_can_arrive_read(core, site
         browser.close()
     assert core.feeds()[0]["options"]["mark_read"] is True
     assert core.article(core.ingest(feed, "new", "Arrives read", base + "/new"))["read"]
+
+
+def test_tray_badges_show_four_digits_over_the_line_and_the_chosen_stream_is_a_tab(web_server):
+    """A four-digit count shows whole, drawn over the tray's dividing line; the
+    chosen stream takes the panes' ground and covers the line like a bookmark."""
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+
+        def many(route):
+            response = route.fetch()
+            data = response.json()
+            data["counts"]["unread"] = 4271
+            route.fulfill(response=response, body=json.dumps(data))
+
+        page.route("**/api/overview", many)
+        page.goto(web_server)
+        tray = page.get_by_role("navigation", name="Streams")
+        badge = tray.locator(".badge")
+        expect(badge).to_have_text("4271")
+        edge = tray.bounding_box()
+        box = badge.bounding_box()
+        assert box["x"] + box["width"] > edge["x"] + edge["width"]
+        assert page.evaluate(
+            "() => { const b = document.querySelector('.tray .badge'), r = b.getBoundingClientRect();"
+            " return document.elementFromPoint(r.right - 3, r.top + r.height / 2).closest('.badge') === b }"
+        )
+        tab = tray.get_by_role("button", name="All articles").bounding_box()
+        assert tab["x"] + tab["width"] == edge["x"] + edge["width"]
+        ground = page.evaluate(
+            "() => getComputedStyle(document.querySelector('.stream-pane')).backgroundColor"
+        )
+        active = page.evaluate(
+            "() => getComputedStyle(document.querySelector('.tray .active')).backgroundColor"
+        )
+        assert active == ground
+        browser.close()

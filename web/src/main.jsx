@@ -1152,7 +1152,7 @@ function App() {
       <Icon size={22} />
       {badge > 0 && (
         <span className="badge" data-unread={badge}>
-          {badge > 999 ? "999+" : badge}
+          {badge > 9999 ? "9999+" : badge}
         </span>
       )}
     </button>

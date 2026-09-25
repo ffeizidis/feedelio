@@ -798,3 +798,41 @@ def test_the_reading_list_has_its_own_view_in_the_tray(core, site, web_server):
         page.reload()
         expect(page.locator(".article-row")).to_have_count(1)
         browser.close()
+
+
+def test_podcasts_are_marked_ctrl_z_undoes_and_a_feed_can_arrive_read(core, site, web_server):
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "Talk Show")["id"]
+    episode = core.ingest(
+        feed, "ep", "An episode", base + "/ep", "<p>Notes.</p>", enclosures=[{"href": base + "/ep.mp3"}]
+    )
+    core.ingest(feed, "post", "A post", base + "/post", "<p>Body.</p>")
+
+    def state(key):
+        core.db.commit()  # see the server's writes
+        return core.article(episode)[key]
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(web_server)
+        row = page.locator(".article-row", has_text="An episode")
+        expect(row.locator(".row-marks").get_by_label("Podcast")).to_be_visible()
+        expect(page.locator(".article-row", has_text="A post").locator(".row-marks")).to_have_count(0)
+        for button, key in (("Mark read: An episode", "read"), ("Star: An episode", "starred")):
+            row.get_by_role("button", name=button, exact=True).click()
+            deadline = time.monotonic() + 5
+            while not state(key) and time.monotonic() < deadline:
+                page.wait_for_timeout(100)
+            assert state(key)
+            page.keyboard.press("Control+z")
+            expect(row.get_by_role("button", name=button, exact=True)).to_be_visible()
+            assert not state(key)
+        page.locator(".feed-line", has_text="Talk Show").click()
+        page.get_by_role("button", name="Manage feed: Talk Show").click()
+        page.get_by_label("Mark new articles as read").check()
+        page.get_by_role("button", name="Save feed settings").click()
+        expect(page.get_by_text("Feed settings saved")).to_be_visible()
+        browser.close()
+    assert core.feeds()[0]["options"]["mark_read"] is True
+    assert core.article(core.ingest(feed, "new", "Arrives read", base + "/new"))["read"]

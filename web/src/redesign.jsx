@@ -123,7 +123,7 @@ export const shortcutGroups = {
     ["↵", "open in reader"],
     ["⇧↵", "open original"],
     ["⇧A", "mark all read"],
-    ["z", "undo last change"],
+    ["z / ⌃Z", "undo last change"],
   ],
   View: [
     ["u", "unread only"],

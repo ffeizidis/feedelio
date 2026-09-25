@@ -757,3 +757,24 @@ def test_opml_import_keeps_feeds_whose_host_no_longer_resolves(core, monkeypatch
     monkeypatch.setattr(content, "addresses", private)
     with pytest.raises(ValueError, match="Private network"):
         core.import_opml(xml)
+
+
+def test_a_feed_can_arrive_read_and_podcasts_are_marked(core, site):
+    base, _, _ = site
+    id = subscription(core, site)
+    before = core.ingest(id, "before", "Before the switch", base + "/before")
+    core.edit_feed(id, options={"mark_read": True})
+    after = core.ingest(id, "after", "After the switch", base + "/after")
+    assert not core.article(before)["read"] and core.article(after)["read"]
+    with pytest.raises(ValueError):
+        core.edit_feed(id, options={"mark_read": "yes"})
+    core.edit_feed(id, options={"mark_read": False})
+    typed = core.ingest(
+        id, "ep1", "Typed episode", base + "/1", enclosures=[{"href": base + "/a", "type": "audio/mpeg"}]
+    )
+    bare = core.ingest(id, "ep2", "Untyped episode", base + "/2", enclosures=[{"href": base + "/ep.MP3?x=1"}])
+    image = core.ingest(
+        id, "img", "A picture", base + "/3", enclosures=[{"href": base + "/p.jpg", "type": "image/jpeg"}]
+    )
+    audio = {a["id"]: a["audio"] for a in core.articles(limit=50)["items"]}
+    assert audio[typed] and audio[bare] and not audio[image] and not audio[before]

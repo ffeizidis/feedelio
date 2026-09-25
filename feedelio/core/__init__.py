@@ -2213,10 +2213,20 @@ class Core:
                 "INSERT OR IGNORE INTO feeds(id,url,title,folder_id,created) VALUES('chrome','chrome:reading-list','Chrome Reading List','inbox',?)",
                 (now(),),
             )
-        result = []
+        result, remove = [], []
         for e in entries:
             url = e["url"]
             if urlsplit(url).scheme not in ("http", "https"):
+                continue
+            # Deleted here while Chrome still has it: Chrome removes it too.
+            # (A page removed in Chrome loses its sync state, so adding it back
+            # there brings it back here.)
+            if self.rows(
+                "SELECT 1 FROM articles a JOIN chrome_state c ON c.url=a.guid"
+                " WHERE a.feed_id=? AND a.guid=? AND a.deleted=1",
+                (feed_id, url),
+            ):
+                remove.append(url)
                 continue
             # Preserve exact Chrome URLs for synchronization; cleaning only affects the article URL.
             # A page is dated when it was added to the list, so the view reads
@@ -2260,13 +2270,13 @@ class Core:
         kept = [e["url"] for e in entries]
         with self.db:
             gone = self.rows(
-                "SELECT id,guid FROM articles WHERE feed_id=? AND deleted=0 AND guid NOT IN (SELECT value FROM json_each(?))",
+                "SELECT id,guid FROM articles WHERE feed_id=? AND guid NOT IN (SELECT value FROM json_each(?))",
                 (feed_id, json.dumps(kept)),
             )
             for a in gone:
                 self.db.execute("UPDATE articles SET deleted=1 WHERE id=?", (a["id"],))
                 self.db.execute("DELETE FROM chrome_state WHERE url=?", (a["guid"],))
-        return {"entries": result}
+        return {"entries": result, "remove": remove}
 
     def execute(self, action, payload):
         actions = {

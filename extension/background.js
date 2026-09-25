@@ -47,6 +47,13 @@ async function sync() {
       )
         await chrome.readingList.updateEntry(update);
     }
+    // Deleted in Feedelio: remove it from Chrome, unless Chrome changed it
+    // while the request was in flight.
+    for (const url of result.remove || []) {
+      const item = current.get(url);
+      if (item && item.lastUpdateTime === original.get(url)?.lastUpdateTime)
+        await chrome.readingList.removeEntry({ url });
+    }
     await chrome.storage.local.set({
       lastSync: new Date().toISOString(),
       error: "",

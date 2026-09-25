@@ -387,6 +387,25 @@ def test_the_reading_list_is_a_view_of_its_own(core, site):
     assert core.articles(view="reading", unread=True)["total"] == 1
 
 
+def test_a_reading_list_page_deleted_here_is_removed_from_chrome(core, site):
+    entries = [
+        {"url": f"https://example.org/{n}", "title": n, "hasBeenRead": False, "lastUpdateTime": 1}
+        for n in ("keep", "copy")
+    ]
+    core.chrome_sync(entries)
+    copy = next(a for a in core.articles(view="reading")["items"] if a["title"] == "copy")
+    core.change_articles([copy["id"]], deleted=True)
+    # Chrome still lists it: it stays deleted here and Chrome is asked to remove it.
+    result = core.chrome_sync(entries)
+    assert result["remove"] == ["https://example.org/copy"]
+    assert [e["url"] for e in result["entries"]] == ["https://example.org/keep"]
+    assert [a["title"] for a in core.articles(view="reading")["items"]] == ["keep"]
+    # Once Chrome has removed it, adding it there again brings it back.
+    assert core.chrome_sync(entries[:1])["remove"] == []
+    assert core.chrome_sync(entries)["remove"] == []
+    assert sorted(a["title"] for a in core.articles(view="reading")["items"]) == ["copy", "keep"]
+
+
 def test_reading_list_pages_are_dated_when_added_and_opened_ones_extract_first(core, monkeypatch):
     entries = [
         {

@@ -263,6 +263,10 @@ function fileSize(bytes) {
 const elapsed = (value) => (value ? ago(value) : "never");
 // What the server says about a feed, in the words the library uses. The
 // classification itself lives in Core.feeds(): one verdict, one threshold.
+// The time the Updated column shows: when a stale feed last published,
+// otherwise when it was last fetched.
+const feedUpdated = (f) =>
+  f.health === "stale" ? f.last_article || f.created : f.checked;
 function feedIssue(f) {
   if (f.health === "error")
     return {
@@ -273,7 +277,7 @@ function feedIssue(f) {
   if (f.health === "stale")
     return {
       kind: "stale",
-      label: `stale ${elapsed(f.last_article || f.created)}`,
+      label: `stale ${elapsed(feedUpdated(f))}`,
       note: "No new items in two weeks or more",
     };
   if (f.health === "partial")
@@ -2196,7 +2200,7 @@ function Library({
     ["title", "Feed", "", 1, (f) => f.title],
     ["folder", "Folder", "", 1, folderName],
     ["unread", "Unread", "feed-unread", -1, (f) => f.unread],
-    ["checked", "Updated", "feed-updated", -1, (f) => f.checked || ""],
+    ["updated", "Updated", "feed-updated", -1, (f) => feedUpdated(f) || ""],
     ["created", "Added", "feed-added", -1, (f) => f.created || ""],
   ];
   const sortValue = feedColumns.find(([key]) => key === sort.key)[4];

@@ -874,3 +874,41 @@ def test_tray_badges_show_four_digits_over_the_line_and_the_chosen_stream_is_a_t
         )
         assert active == ground
         browser.close()
+
+
+def test_the_feed_list_sorts_by_any_column_and_shows_when_each_feed_was_added(core, site, web_server):
+    """Every column heading sorts the feed list; the title opens the feed's
+    settings, so there is no separate edit button."""
+    base, _, _ = site
+    older = core.subscribe(base + "/rss", "inbox", "Alpha")["id"]
+    newer = core.subscribe(base + "/atom", "inbox", "Beta")["id"]
+    core.ingest(older, "one", "One", base + "/one", "<p>Body.</p>")
+    core.ingest(older, "two", "Two", base + "/two", "<p>Body.</p>")
+    with core.db:
+        core.db.execute("UPDATE feeds SET created=? WHERE id=?", ("2025-01-02T00:00:00+00:00", older))
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(web_server + "/library/feeds")
+        titles = page.locator(".feed-table .feed-open")
+        head = page.locator(".feed-table .table-head")
+        expect(titles).to_have_text(["Alpha", "Beta"])
+        expect(page.locator(".feed-table .feed-added")).to_have_text(["Added", "1y", "now"])
+        expect(page.locator(".feed-table .icon-button")).to_have_count(0)
+
+        head.get_by_role("button", name="Added").click()  # Newest first.
+        expect(titles).to_have_text(["Beta", "Alpha"])
+        expect(head.locator("[aria-sort=descending]")).to_have_text("Added")
+        head.get_by_role("button", name="Added").click()
+        expect(titles).to_have_text(["Alpha", "Beta"])
+        head.get_by_role("button", name="Unread").click()  # Most unread first.
+        expect(titles).to_have_text(["Alpha", "Beta"])
+        head.get_by_role("button", name="Feed").click()
+        expect(titles).to_have_text(["Alpha", "Beta"])
+        head.get_by_role("button", name="Feed").click()
+        expect(titles).to_have_text(["Beta", "Alpha"])
+
+        page.get_by_role("button", name="Edit Beta", exact=True).click()
+        expect(page).to_have_url(web_server + "/library/feeds/" + newer)
+        browser.close()

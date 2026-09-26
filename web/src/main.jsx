@@ -14,6 +14,7 @@ import {
   Star,
   Clock3,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   ChevronLeft,
   ArrowUpDown,
@@ -35,7 +36,6 @@ import {
   Undo2,
   Circle,
   CheckCircle2,
-  MoreHorizontal,
   Headphones,
   FileText,
   ShieldCheck,
@@ -2176,6 +2176,7 @@ function Library({
       () => data.feeds.find((f) => f.id === initialFeed) || null,
     ),
     [status, setStatus] = useState("all"),
+    [sort, setSort] = useState({ key: "title", dir: 1 }),
     [fromList, setFromList] = useState(false),
     { error, setError, submit } = useSubmit();
   const [folderSheet, setFolderSheet] = useState(null);
@@ -2185,6 +2186,30 @@ function Library({
   const openFeed = (f) => {
     setFromList(true);
     setEdit(f);
+  };
+  const folderName = (f) =>
+    f.folder_id === "inbox"
+      ? ""
+      : data.folders.find((x) => x.id === f.folder_id)?.name || "";
+  // Names sort A–Z first; counts and dates biggest or newest first.
+  const feedColumns = [
+    ["title", "Feed", "", 1, (f) => f.title],
+    ["folder", "Folder", "", 1, folderName],
+    ["unread", "Unread", "feed-unread", -1, (f) => f.unread],
+    ["checked", "Updated", "feed-updated", -1, (f) => f.checked || ""],
+    ["created", "Added", "feed-added", -1, (f) => f.created || ""],
+  ];
+  const sortValue = feedColumns.find(([key]) => key === sort.key)[4];
+  const compareFeeds = (a, b) => {
+    const x = sortValue(a),
+      y = sortValue(b);
+    const order =
+      typeof x === "number"
+        ? x - y
+        : String(x).localeCompare(String(y), undefined, {
+            sensitivity: "base",
+          });
+    return order * sort.dir || a.title.localeCompare(b.title);
   };
   const settingsSections = {
     feeds: "Feeds",
@@ -2406,15 +2431,43 @@ function Library({
                   )}
                   <div className="feed-table">
                     <div className="table-head">
-                      <span>Feed</span>
-                      <span>Folder</span>
-                      <span className="feed-unread">Unread</span>
-                      <span className="feed-updated">Updated</span>
-                      <span />
+                      {feedColumns.map(([key, label, className, first]) => (
+                        <span
+                          key={key}
+                          className={className}
+                          aria-sort={
+                            sort.key !== key
+                              ? "none"
+                              : sort.dir > 0
+                                ? "ascending"
+                                : "descending"
+                          }
+                        >
+                          <button
+                            className="sort-head"
+                            onClick={() =>
+                              setSort(
+                                sort.key === key
+                                  ? { key, dir: -sort.dir }
+                                  : { key, dir: first },
+                              )
+                            }
+                          >
+                            {label}
+                            {sort.key === key &&
+                              (sort.dir > 0 ? (
+                                <ChevronUp size={14} />
+                              ) : (
+                                <ChevronDown size={14} />
+                              ))}
+                          </button>
+                        </span>
+                      ))}
                       <span />
                     </div>
                     {data.feeds
                       .filter((f) => status === "all" || f.health === status)
+                      .sort(compareFeeds)
                       .map((f) => {
                         const issue = feedIssue(f);
                         return (
@@ -2437,6 +2490,7 @@ function Library({
                                 <span>
                                   <button
                                     className="feed-open"
+                                    aria-label={"Edit " + f.title}
                                     onClick={() => openFeed(f)}
                                   >
                                     <strong>{f.title}</strong>
@@ -2454,10 +2508,7 @@ function Library({
                               </div>
                             </div>
                             <span className="feed-folder">
-                              {f.folder_id === "inbox"
-                                ? "—"
-                                : data.folders.find((x) => x.id === f.folder_id)
-                                    ?.name}
+                              {folderName(f) || "—"}
                             </span>
                             <span className="feed-unread">{f.unread}</span>
                             <span
@@ -2468,6 +2519,12 @@ function Library({
                               title={issue?.note}
                             >
                               {issue?.label || elapsed(f.checked)}
+                            </span>
+                            <span
+                              className="feed-added"
+                              title={f.created && fullDate(f.created)}
+                            >
+                              {f.created ? ago(f.created) : "—"}
                             </span>
                             <span>
                               {issue?.kind === "error" && (
@@ -2480,11 +2537,6 @@ function Library({
                                 </span>
                               )}
                             </span>
-                            <IconButton
-                              icon={MoreHorizontal}
-                              label={"Edit " + f.title}
-                              onClick={() => openFeed(f)}
-                            />
                           </div>
                         );
                       })}

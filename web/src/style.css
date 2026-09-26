@@ -1814,7 +1814,7 @@ dialog::backdrop {
 /* Feeds table */
 .feed-table > div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 128px 64px 104px 16px var(--control);
+  grid-template-columns: minmax(0, 1fr) 128px 64px 104px 72px 16px;
   column-gap: var(--space-4);
   align-items: center;
   height: 48px;
@@ -1836,6 +1836,22 @@ dialog::backdrop {
 }
 .feed-table .table-head:hover {
   background: none;
+}
+.sort-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  background: none;
+}
+.sort-head:hover,
+[aria-sort="ascending"] > .sort-head,
+[aria-sort="descending"] > .sort-head {
+  color: var(--ink);
 }
 .feed-table .muted {
   font-size: var(--text-sm);
@@ -1926,7 +1942,8 @@ dialog::backdrop {
   white-space: nowrap;
 }
 .feed-unread,
-.feed-updated {
+.feed-updated,
+.feed-added {
   font: var(--text-xs) / 1 var(--mono);
   text-align: right;
   overflow: hidden;
@@ -1936,7 +1953,8 @@ dialog::backdrop {
 .feed-unread {
   color: var(--muted);
 }
-.feed-updated {
+.feed-updated,
+.feed-added {
   color: var(--dim);
 }
 .feed-updated[title] {
@@ -1953,7 +1971,8 @@ dialog::backdrop {
   color: var(--danger);
 }
 .table-head .feed-unread,
-.table-head .feed-updated {
+.table-head .feed-updated,
+.table-head .feed-added {
   font: inherit;
   color: inherit;
 }

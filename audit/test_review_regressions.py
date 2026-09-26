@@ -22,7 +22,6 @@ def test_mark_filtered_stream_leaves_unrelated_articles_unread(lab, view):
         p.locator(".tray").get_by_role("button", name="History", exact=True).click()
     else:
         lab.open_title("Target story")
-        p.keyboard.press("m")
         expect(p.get_by_role("button", name="Mark article read", exact=True)).to_be_visible()
         p.locator(".article-tags").get_by_role("button", name="target", exact=True).click()
     expect(p.locator(".article-row")).to_have_count(1)
@@ -46,5 +45,6 @@ def test_unread_pagination_recovers_when_last_page_disappears(lab):
     expect(p.locator(".article-row")).to_have_count(1)
     p.locator(".article-row .row-title").click()
     expect(p.locator(".reading-content h1")).to_be_visible()
+    p.keyboard.press("m")
     expect(p.locator(".article-row")).to_have_count(100)
     assert lab.api("overview")["counts"]["unread"] == 100

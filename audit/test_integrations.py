@@ -135,7 +135,8 @@ def test_real_chromium_extension_reading_list_round_trip(lab, playwright, tmp_pa
         ).click()
         expect(lab.page.locator(".article-row .row-feed")).to_have_text("127.0.0.1")
         lab.open_title("Real Chrome saved item")
-        # Real browser page opening sets read=true; request sync through the extension's own UI.
+        lab.page.keyboard.press("m")
+        # Marked read here; request sync through the extension's own UI.
         lab.until(lambda: lab.api("articles?view=reading")["items"][0]["read"] == 1)
         page.get_by_role("button", name="Save & sync", exact=True).click()
         expect(page.locator("#status")).to_contain_text("Saved. Last sync:", timeout=15000)

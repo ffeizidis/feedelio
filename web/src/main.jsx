@@ -732,7 +732,7 @@ function App() {
     setSelected(item.id);
     setFocused(item.id);
     setLoadImages(false);
-    run("change_articles", { ids: [item.id], read: true, opened: true });
+    run("change_articles", { ids: [item.id], opened: true });
   }
   function navigate(delta) {
     // Keep this reading session's displayed order after opened items disappear

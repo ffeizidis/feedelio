@@ -875,8 +875,9 @@ class Core:
             changes["read_at"] = now()
         if read is not None:
             changes["state_changed"] = now()
-        if not changes:
+        if not changes and not opened:
             return {"ok": True}
+        undo = None
         with self.db:
             articles = [
                 dict(self.db.execute("SELECT * FROM articles WHERE id=?", (id,)).fetchone() or {})
@@ -884,20 +885,23 @@ class Core:
             ]
             if any(not a for a in articles):
                 raise ValueError("Article not found.")
-            undo = self._undo(
-                "Article changes", [("articles", a["id"], {k: a[k] for k in changes}) for a in articles]
-            )
-            for a in articles:
-                self.db.execute(
-                    "UPDATE articles SET " + ",".join(k + "=?" for k in changes) + " WHERE id=?",
-                    [*changes.values(), a["id"]],
+            # Opening alone changes nothing to undo; it only goes into History.
+            if changes:
+                undo = self._undo(
+                    "Article changes", [("articles", a["id"], {k: a[k] for k in changes}) for a in articles]
                 )
+            for a in articles:
+                if changes:
+                    self.db.execute(
+                        "UPDATE articles SET " + ",".join(k + "=?" for k in changes) + " WHERE id=?",
+                        [*changes.values(), a["id"]],
+                    )
                 if opened or (read is not None and bool(read) != bool(a["read"])):
                     self.db.execute(
                         "INSERT INTO events(article_id,feed_id,kind,created) VALUES(?,?,?,?)",
                         (a["id"], a["feed_id"], "open" if opened else "read" if read else "unread", now()),
                     )
-        return {"ok": True, "undo": undo}
+        return {"ok": True, "undo": undo} if undo else {"ok": True}
 
     def mark_all(self, feed_id=None, folder_id=None, view="all", q="", tag=None, titles_only=False):
         where, args = self._where(

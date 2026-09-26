@@ -124,6 +124,16 @@ def test_folder_tree_move_counts_and_cycle(core, site):
     assert core.feeds()[1]["folder_id"] == reading[0]["id"]
 
 
+def test_opening_an_article_leaves_it_unread_and_records_history(core, site):
+    subscription(core, site)
+    a = core.articles()["items"][0]
+    result = core.change_articles([a["id"]], opened=True)
+    assert "undo" not in result  # Nothing changed, so z has nothing to undo.
+    assert core.articles(unread=True)["total"] == 1
+    assert core.articles(view="history")["total"] == 1
+    assert core.statistics()["days"][0]["opens"] == 1
+
+
 def test_state_undo_history_and_deleted_feeds(core, site):
     id = subscription(core, site)
     a = core.articles()["items"][0]

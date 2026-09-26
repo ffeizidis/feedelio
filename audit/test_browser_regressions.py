@@ -17,9 +17,11 @@ def test_navigation_survives_an_empty_unread_list(lab):
     p.get_by_role("switch", name="Unread only", exact=True).click()
     p.keyboard.press("j")
     expect(p.locator(".reading-content h1")).to_have_text("First")
+    p.keyboard.press("m")
     expect(p.locator(".article-row")).to_have_count(1)
     p.keyboard.press("j")
     expect(p.locator(".reading-content h1")).to_have_text("Second")
+    p.keyboard.press("m")
     expect(p.locator(".article-row")).to_have_count(0)
     # Exhausting the list must not disable navigation through the reading trail.
     p.keyboard.press("k")

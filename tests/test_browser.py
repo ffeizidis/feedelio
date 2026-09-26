@@ -12,6 +12,7 @@ import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
 from feedelio.api import app
+from feedelio.core import now
 
 
 @pytest.fixture
@@ -886,6 +887,13 @@ def test_the_feed_list_sorts_by_any_column_and_shows_when_each_feed_was_added(co
     core.ingest(older, "two", "Two", base + "/two", "<p>Body.</p>")
     with core.db:
         core.db.execute("UPDATE feeds SET created=? WHERE id=?", ("2025-01-02T00:00:00+00:00", older))
+        # Alpha was fetched last, but has published nothing for a month: it is
+        # stale, and Updated shows (and sorts by) that month, not the fetch.
+        core.db.execute(
+            "UPDATE feeds SET checked=?, last_article=? WHERE id=?",
+            (now(), now(days=-30), older),
+        )
+        core.db.execute("UPDATE feeds SET checked=? WHERE id=?", (now(minutes=-5), newer))
 
     with sync_playwright() as play:
         browser = play.chromium.launch()
@@ -902,6 +910,9 @@ def test_the_feed_list_sorts_by_any_column_and_shows_when_each_feed_was_added(co
         expect(head.locator("[aria-sort=descending]")).to_have_text("Added")
         head.get_by_role("button", name="Added").click()
         expect(titles).to_have_text(["Alpha", "Beta"])
+        head.get_by_role("button", name="Updated").click()  # Most recent first.
+        expect(titles).to_have_text(["Beta", "Alpha"])
+        expect(page.locator(".feed-table .feed-updated")).to_have_text(["Updated", "5m", "stale 4w"])
         head.get_by_role("button", name="Unread").click()  # Most unread first.
         expect(titles).to_have_text(["Alpha", "Beta"])
         head.get_by_role("button", name="Feed").click()

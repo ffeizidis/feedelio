@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from feedelio.core import BACKUP_TABLES, Core, now
+from feedelio.core import BACKUP_TABLES, EVERY_FEED, Core, now
 from feedelio.core.content import embed_url, safe_url, same_feed, sanitize
 from feedelio.core.reader_extensions import duration_seconds
 
@@ -499,7 +499,7 @@ def test_manual_refresh_jumps_a_queued_library_refresh(core, site):
     second = core.subscribe(site[0] + "/json")["id"]
     core.db.execute("UPDATE jobs SET status='done'")
     core.db.commit()
-    core.refresh_all()  # Queues first, then second, in library order.
+    core.refresh_all()  # Queues first, then second: neither has been checked yet.
     queued = core.enqueue("refresh", {"feed_id": second})  # A scheduled duplicate waits its turn.
     manual = core.enqueue("refresh", {"feed_id": second, "manual": True})
     assert queued == manual  # Promoted, not duplicated.
@@ -509,7 +509,7 @@ def test_manual_refresh_jumps_a_queued_library_refresh(core, site):
     core.tick()
     assert core.rows("SELECT payload FROM jobs WHERE status='done' ORDER BY updated DESC LIMIT 1")[0][
         "payload"
-    ] == {"feed_id": first}
+    ] == {"feed_id": first, "manual": EVERY_FEED}
     with pytest.raises(ValueError, match="Unknown refresh option"):
         core.enqueue("refresh", {"feed_id": first, "url": "x"})
 

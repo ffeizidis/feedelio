@@ -148,8 +148,8 @@ def test_interval_changes_schedule_immediately_in_both_directions(core, site):
     assert core.feeds()[0]["next_check"] == manual["next_check"]
     core.edit_feed(feed, options={"interval": None})
     automatic = core.feeds()[0]
-    assert automatic["interval"] == 120
-    assert 119 * 60 < (datetime.fromisoformat(automatic["next_check"]) - start).total_seconds() < 121 * 60
+    assert automatic["interval"] == 60  # Posts four hours apart, but checked at least hourly.
+    assert 59 * 60 < (datetime.fromisoformat(automatic["next_check"]) - start).total_seconds() < 61 * 60
 
 
 def test_download_metadata_identifies_each_enclosure(core, site):

@@ -28,7 +28,7 @@ def test_changing_manual_interval_reschedules_existing_feed(lab):
     lab.until(lambda: len(lab.api("overview")["feeds"]) == 1)
     lab.finish_jobs()
     before = lab.api("overview")["feeds"][0]
-    assert before["interval"] == 120, before
+    assert before["interval"] == 60, before  # Posts four hours apart; checked at least hourly.
     lab.manager("Subscriptions")
     p = lab.page
     p.get_by_role("button", name="Edit Schedule", exact=True).click()
@@ -38,7 +38,7 @@ def test_changing_manual_interval_reschedules_existing_feed(lab):
     after = lab.api("overview")["feeds"][0]
     assert datetime.fromisoformat(after["next_check"]) <= datetime.now(timezone.utc) + timedelta(
         minutes=18
-    ), "Manual refresh setting left the previous two-hour schedule in place"
+    ), "Manual refresh setting left the previous hourly schedule in place"
 
 
 @pytest.mark.features(30)

@@ -7,12 +7,17 @@ transactional projection containing processed content and user-owned state.
 from __future__ import annotations
 
 import base64
+import inspect
 import io
 import json
 import math
 import os
+import random
+import socket
 import sqlite3
 import statistics
+import threading
+import time
 import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +34,7 @@ from markdownify import markdownify
 from rapidfuzz.fuzz import ratio
 from reader import make_reader
 from reader._parser.jsonfeed import JSONFeedParser
+from reader._storage import Storage
 from reader.discover import from_http_response
 
 from . import backfill as archives
@@ -120,6 +126,90 @@ RULE_STATE = {"read": "read", "star": "starred", "drop": "deleted"}
 RULE_TIMEOUT = 0.05
 # A feed with nothing new for this long is reported as stale, not healthy.
 STALE_DAYS = 14
+# Every feed is checked at least this often, so a new post shows within the
+# hour; a feed that posts often is checked more often, down to the floor.
+MAX_INTERVAL = 60
+MIN_INTERVAL = 15
+# Posting rhythm is judged on this recent window only: backfilled archive
+# posts months apart would otherwise make every feed look quiet.
+RHYTHM_DAYS = 30
+# Refreshes run side by side, but never more than this many at one site.
+PER_HOST = 2
+# "Update now" for the whole library ranks ahead of scheduled refreshes but
+# behind a feed asked for by name (manual=true, which ranks as 1).
+EVERY_FEED = 0.5
+
+
+def aware(value):
+    """A stored ISO date as an aware datetime (UTC when it carries no zone)."""
+    d = datetime.fromisoformat(value)
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def not_future(published):
+    """A publish date later than now is a publisher's mistake or a schedule;
+    it would pin the article to the top of every list, so it reads as now."""
+    try:
+        return now() if published and aware(published) > datetime.now(timezone.utc) else published
+    except ValueError:
+        return published
+
+
+def chain(error):
+    """An exception and every exception it was raised from."""
+    seen = []
+    while error is not None and error not in seen:
+        seen.append(error)
+        error = error.__cause__ or error.__context__
+    return seen
+
+
+def unreachable(error):
+    """Whether a fetch failed before reaching the publisher at all."""
+    return any(
+        isinstance(e, (UnresolvedHost, requests.exceptions.ConnectionError, socket.gaierror))
+        for e in chain(error)
+    )
+
+
+# The worker refreshes feeds on several threads, and reader's database cannot
+# take concurrent writers (a read upgraded to a write fails at once, whatever
+# the timeout). Its calls are short; the network fetches between them are not
+# held up by this lock and still run side by side.
+READER_LOCK = threading.RLock()
+
+
+class LockedStorage(Storage):
+    """reader's storage with every method call taken one thread at a time."""
+
+    def __getattribute__(self, name):
+        attr = super().__getattribute__(name)
+        if name.startswith("__") or not inspect.ismethod(attr):
+            return attr
+
+        def locked(*args, **kwargs):
+            with READER_LOCK:
+                return attr(*args, **kwargs)
+
+        return locked
+
+
+class HostSlots:
+    """How many refreshes are running at each site, shared by the worker's threads."""
+
+    def __init__(self, limit=PER_HOST):
+        self.limit, self.busy, self.lock = limit, {}, threading.Lock()
+
+    def take(self, host):
+        with self.lock:
+            if self.busy.get(host, 0) >= self.limit:
+                return False
+            self.busy[host] = self.busy.get(host, 0) + 1
+            return True
+
+    def release(self, host):
+        with self.lock:
+            self.busy[host] -= 1
 
 
 def is_uid(id):
@@ -308,6 +398,14 @@ class Core:
               (SELECT count(*) FROM feeds older WHERE older.created<feeds.created
                 OR (older.created=feeds.created AND older.id<feeds.id)) % 14)
               WHERE json_extract(options,'$.hue') IS NULL""")
+            # Intervals once ran up to a day; bring every automatic one under the hour.
+            self.db.execute(
+                "UPDATE feeds SET interval=?,next_check=min(coalesce(next_check,?),?)"
+                " WHERE interval>? AND json_extract(options,'$.interval') IS NULL",
+                (MAX_INTERVAL, now(), now(minutes=MAX_INTERVAL), MAX_INTERVAL),
+            )
+            # Articles dated in the future stayed pinned to the top of the list.
+            self.db.execute("UPDATE articles SET published=added WHERE published>added")
             self.db.commit()
             Core.initialised.add(self.root)
         self.db.row_factory = sqlite3.Row
@@ -353,7 +451,12 @@ class Core:
 
                 http.response_hooks.append(response_hook)
 
-        with make_reader(str(self.root / "reader.sqlite"), plugins=[plugin], search_enabled=False) as reader:
+        path = str(self.root / "reader.sqlite")
+        with READER_LOCK:  # Opening it writes too (it turns search off).
+            reader = make_reader(
+                path, plugins=[plugin], search_enabled=False, _storage=LockedStorage(path, timeout=30)
+            )
+        with reader:
             yield reader
 
     def settings(self):
@@ -727,7 +830,7 @@ class Core:
                     self.db.execute("UPDATE feeds SET tags=? WHERE id=?", (json.dumps(tags or []), f["id"]))
         if action == "refresh":
             for f in feeds:
-                self.enqueue("refresh", {"feed_id": f["id"]})
+                self.enqueue("refresh", {"feed_id": f["id"], "manual": True})
         return {"ok": True, "undo": undo}
 
     def _where(
@@ -1094,17 +1197,15 @@ class Core:
         return a
 
     def ingest(self, *args, **kwargs):
+        return self.ingest_new(*args, **kwargs)[0]
+
+    def ingest_new(self, *args, **kwargs):
+        """Ingest an entry and say whether it was a new article, not an update."""
         # Serialize lookup + content/rule updates with interactive state edits.
         # No network requests happen while this short write transaction is held.
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             return self._ingest(*args, **kwargs)
-
-    def ingest_new(self, feed_id, **fields):
-        """Ingest an entry and say whether it was a new article, not an update."""
-        before = self.db.total_changes
-        id = self.ingest(feed_id, **fields)
-        return id, self.db.total_changes > before
 
     def _ingest(
         self,
@@ -1131,7 +1232,7 @@ class Core:
         digest = fingerprint(title, plain(body))
         guid = guid or url or digest
         if self.rows("SELECT 1 FROM tombstones WHERE feed_id=? AND guid=?", (feed_id, guid)):
-            return None
+            return None, False
         # The same item under its id first, then the same content under a new id,
         # then the same link. A title alone is not content: linkless entries and
         # saved pages that merely share a <title> stay separate.
@@ -1162,7 +1263,8 @@ class Core:
                 a.update(
                     title=title or a["title"],
                     author=author or a["author"],
-                    published=published or a["published"],
+                    # A date still in the future keeps the one it was stored with.
+                    published=(not_future(published) == published and published) or a["published"],
                 )
                 if not a["extracted"]:
                     a["url"] = url or a["url"]
@@ -1177,7 +1279,7 @@ class Core:
                     "title author body text words fingerprint tags read starred "
                     "deleted url published enclosures transcript duration".split(),
                 )
-            return a["id"]
+            return a["id"], False
         # A feed set to arrive read keeps its articles without asking for attention.
         feed = self.db.execute("SELECT options FROM feeds WHERE id=?", (feed_id,)).fetchone()
         read = read or bool(feed and json.loads(feed["options"]).get("mark_read"))
@@ -1188,7 +1290,7 @@ class Core:
             url=url,
             title=title or "(Untitled)",
             author=author or "",
-            published=published or now(),
+            published=not_future(published) or now(),
             added=now(),
             body=body,
             text=plain(body),
@@ -1222,7 +1324,7 @@ class Core:
             "INSERT INTO articles (" + ",".join(a) + ") VALUES (" + ",".join("?" for _ in a) + ")",
             [json.dumps(v) if k in JSON_FIELDS else v for k, v in a.items()],
         )
-        return a["id"]
+        return a["id"], True
 
     def _write_article(self, a, columns):
         """Store the named columns of an article dict; JSON fields encode themselves."""
@@ -1261,17 +1363,25 @@ class Core:
                 raise ValueError("Unknown refresh option.")
             # A feed the user asks for now jumps ahead of a queued library-wide
             # refresh: promote its pending job rather than adding a second one.
-            if payload.get("manual") and payload.get("feed_id"):
+            # One refresh per feed at a time: a second request only raises the
+            # urgency of the one already queued. A scheduled check adds nothing
+            # to one that is running; a request made now fetches again after it.
+            if payload.get("feed_id"):
+                urgency = payload.get("manual") or 0
                 pending = self.rows(
-                    "SELECT id FROM jobs WHERE kind='refresh' AND json_extract(payload,'$.feed_id')=? AND status='queued'",
+                    "SELECT id,payload,status FROM jobs WHERE kind='refresh' AND json_extract(payload,'$.feed_id')=?"
+                    " AND status IN ('queued','running') ORDER BY status='queued' DESC",
                     (payload["feed_id"],),
                 )
-                if pending:
+                queued = [j for j in pending if j["status"] == "queued"]
+                if queued and urgency > (queued[0]["payload"].get("manual") or 0):
+                    # Its turn is now: after anything promoted before it.
                     self.db.execute(
-                        "UPDATE jobs SET payload=? WHERE id=?",
-                        (json.dumps(payload, sort_keys=True), pending[0]["id"]),
+                        "UPDATE jobs SET payload=?,updated=? WHERE id=?",
+                        (json.dumps(payload, sort_keys=True), now(), queued[0]["id"]),
                     )
-                    return pending[0]
+                if queued or (pending and not urgency):
+                    return {"id": pending[0]["id"]}
         # An extraction someone is waiting for (an open article) goes ahead of
         # the backlog, e.g. a thousand pages from a Reading List import.
         asked = kind == "extract" and bool(payload.pop("asked", False))
@@ -1296,18 +1406,48 @@ class Core:
 
     def recent_dates(self, feed_id):
         return [
-            datetime.fromisoformat(a["published"])
+            aware(a["published"])
             for a in self.rows(
                 "SELECT published FROM articles WHERE feed_id=? ORDER BY published DESC LIMIT 25", (feed_id,)
             )
         ]
 
     def refresh_interval(self, feed_id, options, dates=None):
+        if options.get("interval"):
+            return int(options["interval"])
         dates = self.recent_dates(feed_id) if dates is None else dates
+        since = datetime.now(timezone.utc) - timedelta(days=RHYTHM_DAYS)
+        dates = [d for d in dates if d > since]
         gaps = [(a - b).total_seconds() / 60 for a, b in zip(dates, dates[1:]) if a > b]
         return int(
-            options.get("interval") or (max(15, min(1440, statistics.median(gaps) / 2)) if gaps else 60)
+            max(MIN_INTERVAL, min(MAX_INTERVAL, statistics.median(gaps) / 2)) if gaps else MAX_INTERVAL
         )
+
+    # Whether the network itself is down, remembered briefly so a pass over
+    # hundreds of feeds asks once rather than once per feed.
+    network_checked = (0.0, True)
+
+    def network_up(self, failing):
+        checked, up = Core.network_checked
+        if time.monotonic() - checked < 30:
+            return up
+        hosts = {
+            urlsplit(f["url"]).hostname
+            for f in self.rows(
+                "SELECT url FROM feeds WHERE deleted=0 AND url LIKE 'http%' AND error IS NULL"
+                " AND checked IS NOT NULL ORDER BY checked DESC LIMIT 20"
+            )
+        } - {urlsplit(failing).hostname, None}
+        up = not hosts
+        for host in list(hosts)[:3]:
+            try:
+                socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+                up = True
+                break
+            except OSError:
+                continue
+        Core.network_checked = (time.monotonic(), up)
+        return up
 
     def refresh(self, feed_id):
         f = self.one("SELECT * FROM feeds WHERE id=? AND deleted=0", (feed_id,))
@@ -1382,12 +1522,14 @@ class Core:
                     # subscription (a duplicate in an import, or a blog that moved
                     # onto a feed the user also subscribed to): the old URL keeps
                     # redirecting, and renaming would only fail on the unique URL.
-                    if (
-                        moved
-                        and moved[-1] != f["url"]
-                        and not self.rows("SELECT 1 FROM feeds WHERE url=?", (moved[-1],))
-                    ):
+                    # An unsubscribed feed at the destination (the duplicate, deleted)
+                    # does not block the move: it takes the old URL instead, so
+                    # restoring it still gives the duplicate it was.
+                    holders = moved and self.rows("SELECT id,deleted FROM feeds WHERE url=?", (moved[-1],))
+                    if moved and moved[-1] != f["url"] and all(h["deleted"] for h in holders):
                         safe_url(moved[-1])
+                        if holders:
+                            reader.delete_feed(moved[-1], missing_ok=True)
                         reader.change_feed_url(f["url"], moved[-1])
                         with self.db:
                             if origin(f["url"]) != origin(moved[-1]):
@@ -1395,7 +1537,13 @@ class Core:
                                     "UPDATE feeds SET options=json_remove(options,'$.cookie') WHERE id=?",
                                     (feed_id,),
                                 )
+                            for h in holders:
+                                self.db.execute(
+                                    "UPDATE feeds SET url=? WHERE id=?", ("moving:" + uid(), h["id"])
+                                )
                             self.db.execute("UPDATE feeds SET url=? WHERE id=?", (moved[-1], feed_id))
+                            for h in holders:
+                                self.db.execute("UPDATE feeds SET url=? WHERE id=?", (f["url"], h["id"]))
             dates = self.recent_dates(feed_id)
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
@@ -1405,7 +1553,12 @@ class Core:
                     "UPDATE feeds SET checked=?,next_check=?,last_article=?,interval=?,error=NULL,failures=0 WHERE id=?",
                     (
                         now(),
-                        now(minutes=interval),
+                        # Jitter keeps feeds refreshed together from staying in
+                        # lockstep; an interval the user chose is kept exact.
+                        now(
+                            minutes=interval
+                            * (1 if current["options"].get("interval") else random.uniform(0.9, 1.1))
+                        ),
                         dates[0].isoformat() if dates else None,
                         interval,
                         feed_id,
@@ -1413,15 +1566,28 @@ class Core:
                 )
             return {"new": new}
         except Exception as error:
+            if unreachable(error) and not self.network_up(f["url"]):
+                # Offline (just woken from sleep, say): nobody failed, so try
+                # again in a minute without counting it against the feed.
+                with self.db:
+                    self.db.execute("UPDATE feeds SET next_check=? WHERE id=?", (now(minutes=1), feed_id))
+                return {"new": 0, "offline": True}
+            retry = now(minutes=min(1440, 15 * 2 ** min(f["failures"], 7)))
+            # A publisher asking us to slow down gets at least the wait it named.
+            pushed = next(
+                (
+                    e
+                    for e in chain(error)
+                    if getattr(getattr(e, "response", None), "status_code", 0) in (429, 503)
+                ),
+                None,
+            )
+            if pushed is not None:
+                retry = max(retry, retry_at(pushed, f["failures"] + 1).isoformat())
             with self.db:
                 self.db.execute(
                     "UPDATE feeds SET checked=?,error=?,failures=failures+1,next_check=? WHERE id=?",
-                    (
-                        now(),
-                        str(error)[:1000],
-                        now(minutes=min(1440, 15 * 2 ** min(f["failures"], 7))),
-                        feed_id,
-                    ),
+                    (now(), str(error)[:1000], retry, feed_id),
                 )
             raise
 
@@ -1797,7 +1963,59 @@ class Core:
         )
         return len(doomed)
 
-    def tick(self):
+    def tick(self, refreshes=True, slots=None):
+        """Schedule due work and run one job.
+
+        The worker's main thread passes refreshes=False and leaves feeds to its
+        refresh threads, which pass refreshes="only" and share one HostSlots.
+        """
+        if refreshes != "only":
+            self.schedule()
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            # Keeping feeds current comes first: after a large import thousands of
+            # extractions are queued, and new posts must not wait behind them.
+            # Archive pages are throttled to one a minute per site, so they cannot
+            # starve the extraction backlog, and a hundred blogs queued together
+            # still advance side by side instead of taking turns at one a minute.
+            hosts = self._archive_hosts()
+            job = None
+            for candidate in self.rows(
+                """
+                SELECT j.*,f.url feed_url FROM jobs j
+                LEFT JOIN feeds f ON f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0
+                WHERE status='queued' AND coalesce(json_extract(result,'$.not_before'),'')<=?
+                AND (kind!='backfill' OR f.id IS NOT NULL)
+                AND CASE WHEN kind='refresh' THEN ? ELSE ? END
+                ORDER BY CASE kind WHEN 'extract' THEN 3 - 4*coalesce(json_extract(result,'$.asked'),0) WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
+                  WHEN 'refresh' THEN -coalesce(json_extract(payload,'$.manual'),0) ELSE 0 END,
+                  updated,created
+            """,
+                (now(), bool(refreshes), refreshes != "only"),
+            ):
+                if (
+                    candidate["kind"] == "backfill"
+                    and archives.host(candidate["result"], candidate["feed_url"]) in hosts
+                ):
+                    continue
+                site = urlsplit(candidate["feed_url"] or "").hostname
+                if candidate["kind"] == "refresh" and slots and not slots.take(site):
+                    continue
+                job = candidate
+                break
+            if job is None:
+                return False
+            self.db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (now(), job["id"]))
+            if job["kind"] == "backfill":
+                self._pace_host(job, self._archive_pause(job).isoformat())
+        try:
+            return self._run(job)
+        finally:
+            if job["kind"] == "refresh" and slots:
+                slots.release(urlsplit(job["feed_url"] or "").hostname)
+
+    def schedule(self):
+        """Queue the refreshes that are due, the nightly purge and archive seeding."""
         with self.db:
             self._setting("worker_heartbeat", now())
         for f in self.rows(
@@ -1820,36 +2038,8 @@ class Core:
                     AND json_extract(j.payload,'$.feed_id')=f.id)
             """):
                 self._enqueue("backfill", {"feed_id": feed["id"]})
-            # Keeping feeds current comes first: after a large import thousands of
-            # extractions are queued, and new posts must not wait behind them.
-            # Archive pages are throttled to one a minute per site, so they cannot
-            # starve the extraction backlog, and a hundred blogs queued together
-            # still advance side by side instead of taking turns at one a minute.
-            hosts = self._archive_hosts()
-            job = None
-            for candidate in self.rows(
-                """
-                SELECT j.*,f.url feed_url FROM jobs j
-                LEFT JOIN feeds f ON f.id=json_extract(j.payload,'$.feed_id') AND f.deleted=0
-                WHERE status='queued' AND coalesce(json_extract(result,'$.not_before'),'')<=?
-                AND (kind!='backfill' OR f.id IS NOT NULL)
-                ORDER BY CASE kind WHEN 'extract' THEN 3 - 4*coalesce(json_extract(result,'$.asked'),0) WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
-                  WHEN 'refresh' THEN -coalesce(json_extract(payload,'$.manual'),0) ELSE 0 END,
-                  updated,created
-            """,
-                (now(),),
-            ):
-                if (
-                    candidate["kind"] != "backfill"
-                    or archives.host(candidate["result"], candidate["feed_url"]) not in hosts
-                ):
-                    job = candidate
-                    break
-            if job is None:
-                return False
-            self.db.execute("UPDATE jobs SET status='running',updated=? WHERE id=?", (now(), job["id"]))
-            if job["kind"] == "backfill":
-                self._pace_host(job, self._archive_pause(job).isoformat())
+
+    def _run(self, job):
         try:
             p = job["payload"]
             if job["kind"] == "refresh":
@@ -1892,8 +2082,14 @@ class Core:
         return True
 
     def refresh_all(self):
-        for f in self.feeds():
-            self.enqueue("refresh", {"feed_id": f["id"]})
+        # Asked for now, so ahead of scheduled work; the longest-waiting first,
+        # so a feed late in the alphabet is not always last.
+        for f in self.rows(
+            "SELECT id FROM feeds WHERE deleted=0 AND id!=? AND url LIKE 'http%'"
+            " ORDER BY checked IS NOT NULL, checked, rowid",
+            (READING_LIST,),
+        ):
+            self.enqueue("refresh", {"feed_id": f["id"], "manual": EVERY_FEED})
         return {"queued": True}
 
     def scan_rules(self, matchers, write, batch=200, job_id=None):

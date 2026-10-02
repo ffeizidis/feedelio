@@ -100,7 +100,7 @@ DEFAULTS = dict(
     extract_articles=True,
     collapsed_folders=[],
 )
-JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result"}
+JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result", "meta"}
 # Articles are always read through their feed, so deleted feeds hide their articles.
 ARTICLES = "FROM articles a JOIN feeds f ON f.id=a.feed_id"
 # An enclosure without a type is still audio when its file says so.
@@ -110,6 +110,12 @@ AUDIO_LINK = " OR ".join(
 )
 # Chrome's Reading List lives in one hidden feed, shown only in its own view.
 READING_LIST = "chrome"
+# Saved YouTube playlists: one feed each, inside a folder of their own that is
+# kept apart from the subscriptions like the reading list.
+YOUTUBE = "youtube"
+PLAYLIST = "yt-"
+VIDEO_ID = regex.compile(r"[\w-]{11}")
+PLAYLIST_ID = regex.compile(r"[\w-]{2,64}")
 
 
 def site_name(url):
@@ -379,9 +385,15 @@ class Core:
             (self.root / "downloads").mkdir(exist_ok=True)
             self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
             self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
-            if "duration" not in {r[1] for r in self.db.execute("PRAGMA table_info(articles)")}:
+            columns = {r[1] for r in self.db.execute("PRAGMA table_info(articles)")}
+            for name, definition in (
+                ("duration", "INTEGER NOT NULL DEFAULT 0"),
+                ("meta", "TEXT NOT NULL DEFAULT '{}'"),
+            ):
+                if name in columns:
+                    continue
                 try:  # The API and the worker start together; whoever is second finds it done.
-                    self.db.execute("ALTER TABLE articles ADD COLUMN duration INTEGER NOT NULL DEFAULT 0")
+                    self.db.execute(f"ALTER TABLE articles ADD COLUMN {name} {definition}")
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc):
                         raise
@@ -527,7 +539,7 @@ class Core:
         return Core.frame_cache[self.root]
 
     def folders(self):
-        return self.rows("SELECT * FROM folders ORDER BY name COLLATE NOCASE")
+        return self.rows("SELECT * FROM folders WHERE id!=? ORDER BY name COLLATE NOCASE", (YOUTUBE,))
 
     def descendants(self, folder_id):
         return [
@@ -545,6 +557,8 @@ class Core:
             raise ValueError("A folder needs a name.")
         if id == "inbox":
             raise ValueError("Unfiled is the permanent default folder.")
+        if YOUTUBE in (id, parent_id):
+            raise ValueError("The YouTube folder follows your YouTube playlists.")
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             if parent_id:
@@ -566,6 +580,8 @@ class Core:
     def delete_folder(self, id):
         if id == "inbox":
             raise ValueError("Unfiled cannot be deleted.")
+        if id == YOUTUBE:
+            raise ValueError("The YouTube folder follows your YouTube playlists.")
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             folder = self.one("SELECT * FROM folders WHERE id=?", (id,))
@@ -584,15 +600,16 @@ class Core:
             self._setting("collapsed_folders", [c for c in self.settings()["collapsed_folders"] if c != id])
         return {"ok": True}
 
-    def feeds(self):
-        # The reading list is not a subscription: it has its own view instead.
+    def feeds(self, playlists=False):
+        # The reading list and saved playlists are not subscriptions: they have
+        # their own views instead.
         feeds = self.rows(
             """SELECT f.*,count(CASE WHEN a.read=0 AND a.deleted=0 THEN 1 END) unread,
           count(CASE WHEN a.deleted=0 THEN 1 END) total,
           count(CASE WHEN a.deleted=0 AND (EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value IN ('paywall','archive-preview'))) THEN 1 END) partial_items FROM feeds f
-          LEFT JOIN articles a ON a.feed_id=f.id WHERE f.deleted=0 AND f.id!=?
+          LEFT JOIN articles a ON a.feed_id=f.id WHERE f.deleted=0 AND f.id!=? AND (f.folder_id=?)=?
           GROUP BY f.id ORDER BY f.title COLLATE NOCASE""",
-            (READING_LIST,),
+            (READING_LIST, YOUTUBE, int(playlists)),
         )
         # One classification for the whole app: the library filter, the sidebar
         # dot and the feed list all read this instead of judging a feed again.
@@ -621,15 +638,18 @@ class Core:
             scope = self.descendants(f["id"])
             f["unread"] = sum(feed["unread"] for feed in feeds if feed["folder_id"] in scope)
         counts = self.one(
-            f"""SELECT coalesce(sum(f.id!=?),0) total,coalesce(sum(a.read=0 AND f.id!=?),0) unread,
+            f"""SELECT coalesce(sum(f.id!=? AND f.folder_id!=?),0) total,
+          coalesce(sum(a.read=0 AND f.id!=? AND f.folder_id!=?),0) unread,
           coalesce(sum(a.starred=1),0) starred,
           coalesce(sum(a.read=0 AND json_extract(f.options,'$.bookmarked')=1),0) bookmarks,
-          coalesce(sum(a.read=0 AND f.id=?),0) reading
+          coalesce(sum(a.read=0 AND f.id=?),0) reading,
+          coalesce(sum(a.read=0 AND f.folder_id=?),0) youtube
           {ARTICLES} WHERE a.deleted=0 AND f.deleted=0""",
-            (READING_LIST,) * 3,
+            (READING_LIST, YOUTUBE) * 3,
         )
         return dict(
             feeds=feeds,
+            playlists=self.feeds(playlists=True),
             folders=folders,
             counts=counts,
             settings=self.settings(),
@@ -860,13 +880,20 @@ class Core:
             where.append("EXISTS(SELECT 1 FROM events e WHERE e.article_id=a.id AND e.kind='open')")
         if view == "bookmarks":
             where.append("json_extract(f.options,'$.bookmarked')=1")
-        # Reading-list articles show in their own view, and in Saved and History.
+        # Reading-list articles and saved videos show in their own views, and in
+        # Saved and History.
         if view == "reading":
             where.append("a.feed_id=?")
             args.append(READING_LIST)
+        elif view == "youtube":
+            where.append("f.folder_id=?")
+            args.append(YOUTUBE)
         elif view in ("all", "bookmarks"):
             where.append("a.feed_id!=?")
             args.append(READING_LIST)
+            if not feed_id:
+                where.append("f.folder_id!=?")
+                args.append(YOUTUBE)
         if tag:
             where.append("EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value=?)")
             args.append(tag)
@@ -905,13 +932,15 @@ class Core:
             tag=tag,
             titles_only=titles_only,
         )
-        if deduplicate and view not in ("starred", "reading"):
+        if deduplicate and view not in ("starred", "reading", "youtube"):
             # A suppressed story must have an earlier surviving match. Evaluate
             # visibility at read time so delete, purge, undo and old backups all
             # work without rewriting user state or maintaining duplicate flags.
-            where += """ AND (a.duplicate=0 OR NOT EXISTS(
+            # A saved video is never hidden behind a channel's copy of it.
+            where += """ AND (a.duplicate=0 OR f.folder_id='youtube' OR NOT EXISTS(
                 SELECT 1 FROM articles b JOIN feeds bf ON bf.id=b.feed_id
                 WHERE b.deleted=0 AND bf.deleted=0 AND b.feed_id!=a.feed_id AND b.feed_id!='chrome'
+                AND bf.folder_id!='youtube'
                 AND (b.added<a.added OR (b.added=a.added AND b.id<a.id))
                 AND title_similarity(a.title,b.title)>=94))"""
         order = (
@@ -925,6 +954,7 @@ class Core:
         items = self.rows(
             f"""SELECT a.id,a.feed_id,a.title,a.url,a.author,a.published,a.read,a.starred,
           a.read_at,a.words,a.tags,a.duplicate,substr(a.text,1,190) excerpt,f.title feed_title,f.folder_id,
+          CASE WHEN f.folder_id='youtube' THEN a.meta END meta,a.duration,
           EXISTS(SELECT 1 FROM json_each(a.enclosures) e WHERE json_extract(e.value,'$.type') LIKE 'audio/%'
             OR {AUDIO_LINK}) audio
           {ARTICLES} WHERE {where} ORDER BY {order},a.id LIMIT ? OFFSET ?""",
@@ -1272,7 +1302,7 @@ class Core:
                 a.update(title=title or a["title"], author=author or a["author"], fingerprint=digest)
                 if not a["extracted"]:
                     a["body"] = body
-                a = self.apply_rules(a)
+                a = self.apply_rules(a, [] if feed_id.startswith(PLAYLIST) else None)
             if a != previous:
                 self._write_article(
                     a,
@@ -1307,6 +1337,7 @@ class Core:
             extracted=0,
             state_changed=None,
             duration=duration,
+            meta={},
         )
         if len(title) >= 20:
             recent = self.rows(
@@ -1319,7 +1350,7 @@ class Core:
                     for x in recent
                 )
             )
-        a = self.apply_rules(a)
+        a = self.apply_rules(a, [] if feed_id.startswith(PLAYLIST) else None)
         self.db.execute(
             "INSERT INTO articles (" + ",".join(a) + ") VALUES (" + ",".join("?" for _ in a) + ")",
             [json.dumps(v) if k in JSON_FIELDS else v for k, v in a.items()],
@@ -2106,7 +2137,11 @@ class Core:
         scanned = changed_articles = matched_articles = timeouts = 0
         slow = set()
         # Deleted articles stay out of reach, as they already are for ingest.
-        ids = [row["id"] for row in self.rows("SELECT id FROM articles WHERE deleted=0")]
+        # Saved videos were kept on purpose; rules sort what feeds bring in.
+        ids = [
+            row["id"]
+            for row in self.rows(f"SELECT a.id {ARTICLES} WHERE a.deleted=0 AND f.folder_id!=?", (YOUTUBE,))
+        ]
         for start in range(0, len(ids), batch):
             chunk = ids[start : start + batch]
             sql = "SELECT * FROM articles WHERE id IN (%s) AND deleted=0" % ",".join("?" for _ in chunk)
@@ -2406,6 +2441,72 @@ class Core:
             downloads=sum(1 for p in (self.root / "downloads").iterdir() if p.is_file()),
         )
 
+    def youtube_sync(self, playlists):
+        """The extension sends every playlist of the signed-in YouTube account.
+
+        Saved videos are kept for good: one that leaves its playlist, or that
+        YouTube takes down, keeps everything stored about it and is only marked.
+        """
+        stamp = now()
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO folders VALUES (?,?,NULL)", (YOUTUBE, "YouTube"))
+        synced = new = 0
+        for p in playlists:
+            if not PLAYLIST_ID.fullmatch(str(p.get("id") or "")):
+                continue
+            feed_id = PLAYLIST + p["id"]
+            title = str(p.get("title") or "").strip() or p["id"]
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                self.db.execute(
+                    "INSERT OR IGNORE INTO feeds(id,url,title,folder_id,created) VALUES(?,?,?,?,?)",
+                    (feed_id, "youtube:playlist:" + p["id"], title, YOUTUBE, stamp),
+                )
+                if self.one("SELECT deleted FROM feeds WHERE id=?", (feed_id,))["deleted"]:
+                    continue  # Removed here, so a later sync leaves it out.
+                self.db.execute("UPDATE feeds SET title=?,checked=? WHERE id=?", (title, stamp, feed_id))
+            synced += 1
+            listed = set()
+            for position, v in enumerate(p.get("videos") or []):
+                if not VIDEO_ID.fullmatch(str(v.get("id") or "")):
+                    continue
+                guid = "yt:video:" + v["id"]
+                listed.add(guid)
+                stored = self.rows("SELECT id,meta FROM articles WHERE feed_id=? AND guid=?", (feed_id, guid))
+                if not stored:
+                    if v.get("unavailable"):
+                        continue  # Gone before it was ever seen: there is nothing to keep.
+                    id, added = self.ingest_new(
+                        feed_id,
+                        guid,
+                        str(v.get("title") or ""),
+                        "https://www.youtube.com/watch?v=" + v["id"],
+                        author=str(v.get("channel") or ""),
+                    )
+                    if not id:
+                        continue  # Deleted here for good.
+                    new += added
+                    stored = self.rows("SELECT id,meta FROM articles WHERE id=?", (id,))
+                a = stored[0]
+                meta = dict(a["meta"], video_id=v["id"], position=position)
+                meta.pop("left_playlist", None)
+                if v.get("unavailable"):
+                    meta.setdefault("unavailable", stamp)
+                else:
+                    meta.pop("unavailable", None)
+                if meta != a["meta"]:
+                    with self.db:
+                        self.db.execute("UPDATE articles SET meta=? WHERE id=?", (json.dumps(meta), a["id"]))
+            # The whole playlist was sent, so a video missing from it has left it.
+            with self.db:
+                for a in self.rows(
+                    "SELECT id,guid,meta FROM articles WHERE feed_id=? AND deleted=0", (feed_id,)
+                ):
+                    if a["guid"] not in listed and "left_playlist" not in a["meta"]:
+                        meta = dict(a["meta"], left_playlist=stamp)
+                        self.db.execute("UPDATE articles SET meta=? WHERE id=?", (json.dumps(meta), a["id"]))
+        return {"playlists": synced, "new": new}
+
     def chrome_sync(self, entries):
         feed_id = READING_LIST
         with self.db:
@@ -2497,6 +2598,7 @@ class Core:
             "import_opml",
             "restore",
             "chrome_sync",
+            "youtube_sync",
             "delete_download",
         }
         if action not in actions:

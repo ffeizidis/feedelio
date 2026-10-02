@@ -220,6 +220,16 @@ def download(id: str):
         return FileResponse(core.download_path(id), media_type="audio/mpeg")
 
 
+@app.get("/api/thumbs/{video_id}")
+def thumbnail(video_id: str):
+    with Core() as core:
+        path = core.thumbnail_path(video_id)
+    if not path.is_file():
+        raise HTTPException(404, "No thumbnail was kept for this video.")
+    # Named by the video, and a video's thumbnail is kept as first saved.
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=604800"})
+
+
 class SinglePage(StaticFiles):
     """The app names its pages in the address (/f/<feed>, /a/<article>, …); they
     are all the one page, so a reload of any of them gets it."""

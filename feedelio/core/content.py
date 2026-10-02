@@ -299,6 +299,10 @@ def video_id(url):
     return embed.rsplit("/", 1)[1] if embed else None
 
 
+# Where watch pages come from; tests point it at a local server.
+YOUTUBE = "https://www.youtube.com"
+
+
 def probe_video(url, options=None):
     """Classify a YouTube link without loading the page.
 
@@ -309,16 +313,27 @@ def probe_video(url, options=None):
     """
     id = video_id(url)
     headers = request_headers(options, cookie="SOCS=CAI")
-    video = dict(short=False, url=url, duration=0, title="", description="", author="", published=None)
+    video = dict(
+        short=False,
+        url=url,
+        duration=0,
+        title="",
+        description="",
+        author="",
+        published=None,
+        status="",
+    )
     with http_client(options, timeout=30) as client:
-        response = client.head(f"https://www.youtube.com/shorts/{id}", headers=headers)
+        response = client.head(f"{YOUTUBE}/shorts/{id}", headers=headers)
         if response.status_code == 200:
             video.update(short=True, url=f"https://www.youtube.com/shorts/{id}")
-        page = client.get(f"https://www.youtube.com/watch?v={id}", headers=headers)
+        page = client.get(f"{YOUTUBE}/watch?v={id}", headers=headers)
         if page.status_code == 429 or page.status_code >= 500:
             page.raise_for_status()  # Worth a retry later, unlike a private or removed video.
         if page.status_code == 200:
             video.update(watch_page_details(page.text[:4_000_000]))
+        elif page.status_code in (404, 410):
+            video["status"] = "ERROR"
     return video
 
 
@@ -331,13 +346,77 @@ def watch_page_details(text):
     for key in ("shortDescription", "author"):
         found = regex.search(r'"' + key + r'":("(?:[^"\\]|\\.)*")', text)
         strings[key] = json.loads(found.group(1)) if found else ""
+    player = embedded_json(text, r"ytInitialPlayerResponse\s*=\s*") or {}
+    details = player.get("videoDetails") or {}
+    micro = (player.get("microformat") or {}).get("playerMicroformatRenderer") or {}
+    thumbnails = (details.get("thumbnail") or {}).get("thumbnails") or []
+    tracks = ((player.get("captions") or {}).get("playerCaptionsTracklistRenderer") or {}).get(
+        "captionTracks"
+    ) or []
+    # Captions someone wrote come before YouTube's automatic ones.
+    tracks = sorted((t for t in tracks if t.get("baseUrl")), key=lambda t: t.get("kind") == "asr")
+    description = strings["shortDescription"] or str(details.get("shortDescription") or "")
     return dict(
         duration=iso_duration(meta.get("duration")),
         title=meta.get("name", ""),
-        description=strings["shortDescription"],
-        author=strings["author"],
+        description=description,
+        author=strings["author"] or str(details.get("author") or ""),
         published=utc(meta.get("datePublished")),
+        thumbnail=max(thumbnails, key=lambda t: t.get("width") or 0)["url"] if thumbnails else "",
+        keywords=[str(k) for k in details.get("keywords") or []],
+        category=str(micro.get("category") or ""),
+        channel_url=f"https://www.youtube.com/channel/{details['channelId']}"
+        if regex.fullmatch(r"[\w-]+", str(details.get("channelId") or ""))
+        else "",
+        chapters=page_chapters(text) or description_chapters(description),
+        captions=tracks[0]["baseUrl"] if tracks else "",
+        status=str((player.get("playabilityStatus") or {}).get("status") or ""),
     )
+
+
+def embedded_json(text, prefix):
+    """The JSON object a page assigns after the given pattern, or None."""
+    found = regex.search(prefix, text)
+    if not found:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text[found.end() :])
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def page_chapters(text):
+    """The chapters YouTube shows under the player."""
+    chapters = []
+    for found in regex.finditer(r'"chapterRenderer"\s*:\s*', text):
+        try:
+            chapter, _ = json.JSONDecoder().raw_decode(text[found.end() :])
+            title = chapter["title"].get("simpleText") or "".join(
+                r.get("text", "") for r in chapter["title"].get("runs", [])
+            )
+            start = int(chapter["timeRangeStartMillis"]) // 1000
+        except (ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if title and not any(c["start"] == start for c in chapters):
+            chapters.append(dict(start=start, title=title))
+    return sorted(chapters, key=lambda c: c["start"])
+
+
+def description_chapters(description):
+    """Chapters as uploaders write them: a timestamp per line, the first at 0:00."""
+    chapters = []
+    for line in (description or "").splitlines():
+        found = regex.match(r"\s*[\[(]?((?:\d{1,2}:)?\d{1,2}:\d{2})[\])]?\s*[-–—:|]?\s*(.+)", line)
+        if found:
+            parts = [int(n) for n in found.group(1).split(":")]
+            start = sum(n * 60**i for i, n in enumerate(reversed(parts)))
+            chapters.append(dict(start=start, title=found.group(2).strip()))
+    # YouTube's own rule: three or more, starting at the beginning, in order.
+    starts = [c["start"] for c in chapters]
+    if len(chapters) < 3 or starts[0] != 0 or starts != sorted(starts):
+        return []
+    return chapters
 
 
 def utc(stamp):

@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
+import httpx
 import regex
 import requests
 from bs4 import BeautifulSoup
@@ -99,6 +100,7 @@ DEFAULTS = dict(
     new_feed_read=True,
     extract_articles=True,
     collapsed_folders=[],
+    youtube_checked="",
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result", "meta"}
 # Articles are always read through their feed, so deleted feeds hide their articles.
@@ -116,6 +118,10 @@ YOUTUBE = "youtube"
 PLAYLIST = "yt-"
 VIDEO_ID = regex.compile(r"[\w-]{11}")
 PLAYLIST_ID = regex.compile(r"[\w-]{2,64}")
+RECHECK_PER_HOUR = 50
+# How YouTube's player says a video is no longer watchable.
+GONE = ("ERROR", "UNPLAYABLE", "LOGIN_REQUIRED")
+THUMBNAIL_BYTES = 2_000_000
 
 
 def site_name(url):
@@ -383,6 +389,7 @@ class Core:
         if self.db is None:
             self.root.mkdir(parents=True, exist_ok=True)
             (self.root / "downloads").mkdir(exist_ok=True)
+            (self.root / "thumbs").mkdir(exist_ok=True)
             self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
             self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
             columns = {r[1] for r in self.db.execute("PRAGMA table_info(articles)")}
@@ -1365,7 +1372,7 @@ class Core:
         )
 
     def enqueue(self, kind, payload=None):
-        if kind not in ("refresh", "extract", "download", "backfill", "purge", "rules"):
+        if kind not in ("refresh", "extract", "download", "backfill", "purge", "rules", "video"):
             raise ValueError("Unknown job type.")
         payload = payload or {}
         with self.db:
@@ -2018,7 +2025,7 @@ class Core:
                 WHERE status='queued' AND coalesce(json_extract(result,'$.not_before'),'')<=?
                 AND (kind!='backfill' OR f.id IS NOT NULL)
                 AND CASE WHEN kind='refresh' THEN ? ELSE ? END
-                ORDER BY CASE kind WHEN 'extract' THEN 3 - 4*coalesce(json_extract(result,'$.asked'),0) WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
+                ORDER BY CASE kind WHEN 'extract' THEN 3 - 4*coalesce(json_extract(result,'$.asked'),0) WHEN 'video' THEN 3 WHEN 'download' THEN 2 WHEN 'backfill' THEN 1
                   WHEN 'refresh' THEN -coalesce(json_extract(payload,'$.manual'),0) ELSE 0 END,
                   updated,created
             """,
@@ -2059,6 +2066,19 @@ class Core:
             (now(days=-1),),
         ):
             self.enqueue("purge")
+        # Saved videos are looked at again weekly, so one YouTube takes down is
+        # marked even while it stays in its playlist; a few each hour.
+        if self.settings()["youtube_checked"] < now(hours=-1):
+            with self.db:
+                self._setting("youtube_checked", now())
+                for v in self.rows(
+                    f"""SELECT json_extract(a.meta,'$.video_id') video_id {ARTICLES}
+                    WHERE f.folder_id=? AND f.deleted=0 AND a.deleted=0
+                    AND json_extract(a.meta,'$.checked')<? AND json_extract(a.meta,'$.unavailable') IS NULL
+                    GROUP BY video_id ORDER BY min(json_extract(a.meta,'$.checked')) LIMIT ?""",
+                    (YOUTUBE, now(days=-7), RECHECK_PER_HOUR),
+                ):
+                    self._enqueue("video", {"video_id": v["video_id"]})
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             # Seed existing subscriptions too, once, after a successful refresh.
@@ -2084,6 +2104,8 @@ class Core:
                 return True
             elif job["kind"] == "rules":
                 result = self.reapply_rules(job_id=job["id"])
+            elif job["kind"] == "video":
+                result = self.preserve_video(**p)
             else:
                 result = self.purge()
             with self.db:
@@ -2096,7 +2118,7 @@ class Core:
             # from one host after an import) gets a later retry, not a lost article.
             code = getattr(getattr(error, "response", None), "status_code", None)
             attempts = (job["result"] or {}).get("attempts", 0) + 1
-            retry = job["kind"] == "extract" and code in (429, 503) and attempts < 4
+            retry = job["kind"] in ("extract", "video") and code in (429, 503) and attempts < 4
             with self.db:
                 self.db.execute(
                     "UPDATE jobs SET status=?,updated=?,error=?,result=? WHERE id=?",
@@ -2343,7 +2365,19 @@ class Core:
                             f"Downloaded episode {j['id']} is missing; remove it before backing up."
                         )
                     media[j["id"]] = base64.b64encode(path.read_bytes()).decode("ascii")
-        return {"format": "feedelio", "version": 1, "created": now(), "tables": data, "media": media}
+            thumbnails = {
+                path.stem: base64.b64encode(path.read_bytes()).decode("ascii")
+                for path in (self.root / "thumbs").glob("*.jpg")
+                if VIDEO_ID.fullmatch(path.stem)
+            }
+        return {
+            "format": "feedelio",
+            "version": 1,
+            "created": now(),
+            "tables": data,
+            "media": media,
+            "thumbnails": thumbnails,
+        }
 
     def restore(self, backup):
         if backup.get("format") != "feedelio" or backup.get("version") != 1:
@@ -2365,6 +2399,10 @@ class Core:
         if set(media) != expected_media or any(not is_uid(id) for id in media):
             raise ValueError("Backup has missing or invalid downloaded episodes.")
         decoded = {id: base64.b64decode(value, validate=True) for id, value in media.items()}
+        thumbnails = backup.get("thumbnails", {})  # Older backups have none.
+        if any(not VIDEO_ID.fullmatch(str(id)) for id in thumbnails):
+            raise ValueError("Backup has invalid video thumbnails.")
+        decoded_thumbnails = {id: base64.b64decode(v, validate=True) for id, v in thumbnails.items()}
         written = []
         try:
             with self.db:
@@ -2395,6 +2433,11 @@ class Core:
                     path = self.root / "downloads" / id
                     written.append(path)
                     path.write_bytes(content)
+                for id, content in decoded_thumbnails.items():
+                    path = self.thumbnail_path(id)
+                    if not path.exists():
+                        written.append(path)
+                        path.write_bytes(content)
                 if self.db.execute("PRAGMA foreign_key_check").fetchone():
                     raise ValueError("Backup contains invalid references.")
         except Exception:
@@ -2435,7 +2478,11 @@ class Core:
 
     def archive_size(self):
         """Library size on disk: both databases (with WAL) and downloaded episodes."""
-        files = [p for p in self.root.glob("*.sqlite*")] + list((self.root / "downloads").glob("*"))
+        files = (
+            list(self.root.glob("*.sqlite*"))
+            + list((self.root / "downloads").glob("*"))
+            + list((self.root / "thumbs").glob("*"))
+        )
         return dict(
             bytes=sum(p.stat().st_size for p in files if p.is_file()),
             downloads=sum(1 for p in (self.root / "downloads").iterdir() if p.is_file()),
@@ -2489,6 +2536,9 @@ class Core:
                     stored = self.rows("SELECT id,meta FROM articles WHERE id=?", (id,))
                 a = stored[0]
                 meta = dict(a["meta"], video_id=v["id"], position=position)
+                if "checked" not in meta and not v.get("unavailable"):
+                    with self.db:
+                        self._enqueue("video", {"video_id": v["id"]})
                 meta.pop("left_playlist", None)
                 if v.get("unavailable"):
                     meta.setdefault("unavailable", stamp)
@@ -2506,6 +2556,82 @@ class Core:
                         meta = dict(a["meta"], left_playlist=stamp)
                         self.db.execute("UPDATE articles SET meta=? WHERE id=?", (json.dumps(meta), a["id"]))
         return {"playlists": synced, "new": new}
+
+    def thumbnail_path(self, video_id):
+        if not VIDEO_ID.fullmatch(video_id or ""):
+            raise ValueError("Not a YouTube video.")
+        return self.root / "thumbs" / f"{video_id}.jpg"
+
+    def preserve_video(self, video_id):
+        """Keep what YouTube says about a saved video, for when it is gone.
+
+        Run once when a video is saved and weekly after. What is stored is only
+        ever filled in, never emptied: once YouTube stops serving the video,
+        the copy here is all there is, and it is only marked unavailable.
+        """
+        guid = "yt:video:" + video_id
+        options = {}
+        video = probe_video("https://www.youtube.com/watch?v=" + video_id, options)
+        if not video["title"] and video["status"] not in GONE:
+            # A consent or bot-check page says nothing about the video; try later.
+            raise ValueError("YouTube did not describe this video; it will be tried again.")
+        stored = self.rows(
+            f"SELECT a.transcript {ARTICLES} WHERE a.guid=? AND f.folder_id=? AND a.transcript!='' LIMIT 1",
+            (guid, YOUTUBE),
+        )
+        transcript = stored[0]["transcript"] if stored else ""
+        if video["title"] and video["captions"] and not transcript:
+            try:
+                raw, _, _ = fetch(video["captions"], options)
+                transcript = plain(raw.decode("utf-8", errors="replace"))
+            except (httpx.HTTPError, ValueError):
+                pass  # Captions can need a token YouTube hands only to its player.
+        thumbnail = self.thumbnail_path(video_id)
+        if video["title"] and not thumbnail.exists():
+            for url in filter(None, (video["thumbnail"], f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")):
+                try:
+                    data, _, headers = fetch(url, options, max_bytes=THUMBNAIL_BYTES)
+                except (httpx.HTTPError, ValueError):
+                    continue
+                if headers.get("content-type", "").startswith("image/"):
+                    partial = thumbnail.with_suffix(".part")
+                    partial.write_bytes(data)
+                    partial.replace(thumbnail)
+                    break
+        stamp = now()
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            for a in self.rows(f"SELECT a.* {ARTICLES} WHERE a.guid=? AND f.folder_id=?", (guid, YOUTUBE)):
+                meta = dict(a["meta"], checked=stamp)
+                if not video["title"]:  # Removed, private or blocked: keep the copy.
+                    meta.setdefault("unavailable", stamp)
+                else:
+                    meta.pop("unavailable", None)
+                    for key in ("keywords", "category", "chapters", "channel_url"):
+                        if video[key]:
+                            meta[key] = video[key]
+                    if thumbnail.exists():
+                        meta["thumbnail"] = True
+                    a.update(
+                        title=video["title"],
+                        author=video["author"] or a["author"],
+                        published=not_future(video["published"]) or a["published"],
+                        duration=video["duration"] or a["duration"],
+                        transcript=transcript or a["transcript"],
+                        extracted=1,
+                    )
+                    if video["description"]:
+                        a["body"] = sanitize(text_html(video["description"]), a["url"])
+                    a["text"] = plain(a["body"])
+                    a["words"] = len(a["text"].split()) + len(a["transcript"].split())
+                    if video["short"]:
+                        a["tags"] = sorted(set(a["tags"] + ["short"]))
+                a["meta"] = meta
+                self._write_article(
+                    a,
+                    "title author published duration transcript body text words tags extracted meta".split(),
+                )
+        return {"video_id": video_id, "available": bool(video["title"])}
 
     def chrome_sync(self, entries):
         feed_id = READING_LIST

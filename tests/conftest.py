@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import threading
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -79,10 +80,12 @@ def site():
             }
         ),
     )
+    # Recent, so the feed never ages into "stale" as the calendar moves on.
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     routes["/atom"] = (
         200,
         {"Content-Type": "application/atom+xml"},
-        f'''<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom journal</title><id>{base}/atom</id><updated>2026-09-15T12:00:00Z</updated><entry><id>atom-one</id><title>Atom story</title><updated>2026-09-15T12:00:00Z</updated><link href="{base}/atom-story"/><content type="html">&lt;p&gt;Atom article body.&lt;/p&gt;</content></entry></feed>''',
+        f'''<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom journal</title><id>{base}/atom</id><updated>{recent}</updated><entry><id>atom-one</id><title>Atom story</title><updated>{recent}</updated><link href="{base}/atom-story"/><content type="html">&lt;p&gt;Atom article body.&lt;/p&gt;</content></entry></feed>''',
     )
     routes["/rdf"] = (
         200,

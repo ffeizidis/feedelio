@@ -54,6 +54,7 @@ import {
   Loader2,
   Pencil,
   Filter,
+  ListVideo,
 } from "lucide-react";
 import "./style.css";
 import "@fontsource/italianno/latin-400.css";
@@ -93,9 +94,12 @@ const TRAY_WIDTH = 64;
 // Chrome's Reading List arrives as one hidden feed; its articles show under
 // the website they are on, in their own view.
 const READING_LIST = "chrome";
+// Each saved YouTube playlist is a feed with this prefix, in a view of its own.
+const isPlaylist = (id) => (id || "").startsWith("yt-");
 // The address names the page, so a reload or a shared link lands on the same
 // stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /reading,
-// /history, /a/<article>; a bookmarked feed or folder is /bookmarks/f/<feed> or /bookmarks/d/<folder>.
+// /youtube, /history, /a/<article>; a bookmarked feed or folder is
+// /bookmarks/f/<feed> or /bookmarks/d/<folder>, and a playlist /youtube/f/<id>.
 const LIBRARY_TABS = [
   "feeds",
   "folders",
@@ -122,13 +126,16 @@ function readLocation() {
       view: kind,
       scope: id === "f" ? { feed_id: feed } : { folder_id: feed },
     };
-  if (["starred", "bookmarks", "reading", "history"].includes(kind))
+  if (kind === "youtube" && id === "f" && feed)
+    return { view: kind, scope: { feed_id: feed } };
+  if (["starred", "bookmarks", "reading", "youtube", "history"].includes(kind))
     return { view: kind };
   return {};
 }
 function pageUrl(selected, view, scope) {
   if (selected) return "/a/" + selected;
-  const within = view === "bookmarks" ? "/bookmarks" : "";
+  const within =
+    view === "bookmarks" ? "/bookmarks" : view === "youtube" ? "/youtube" : "";
   if (scope.feed_id) return within + "/f/" + scope.feed_id;
   if (scope.folder_id) return within + "/d/" + scope.folder_id;
   return view === "all" ? "/" : "/" + view;
@@ -294,12 +301,15 @@ const VIEW_TITLES = {
   starred: "Saved for later",
   bookmarks: "Bookmarked feeds",
   reading: "Reading list",
+  youtube: "YouTube",
   history: "Recently read",
 };
 const streamTitle = (data, view, scope, q) =>
   q
     ? "Search results"
-    : data?.feeds.find((f) => f.id === scope.feed_id)?.title ||
+    : [...(data?.feeds || []), ...(data?.playlists || [])].find(
+        (f) => f.id === scope.feed_id,
+      )?.title ||
       data?.folders.find((f) => f.id === scope.folder_id)?.name ||
       VIEW_TITLES[view];
 const feedStatuses = {
@@ -310,6 +320,14 @@ const feedStatuses = {
   stale: "Stale",
   partial: "Partial",
 };
+// A saved video that YouTube lost, or that left its playlist, says so in the list.
+function VideoStatus({ meta }) {
+  if (meta?.unavailable)
+    return <span className="video-status">Unavailable</span>;
+  if (meta?.left_playlist)
+    return <span className="video-status">Removed from playlist</span>;
+  return null;
+}
 // Small marks in the article list: what kind of item this is before opening it.
 function ArticleMarks({ item }) {
   const url = item.url || "";
@@ -549,6 +567,7 @@ function App() {
   const [toast, setToast] = useState(null),
     [busy, setBusy] = useState(0),
     [loadImages, setLoadImages] = useState(false),
+    [videoStart, setVideoStart] = useState(null),
     [reloadPolicy, setReloadPolicy] = useState(false);
   const [token, setToken] = useState("");
   const [paneWidth, setPaneWidth] = useState(null);
@@ -671,7 +690,10 @@ function App() {
     if (!placed.current && a && a.id === start.selected) {
       placed.current = true;
       if (a.feed_id === READING_LIST) setView("reading");
-      else if (!scope.feed_id && !scope.folder_id)
+      else if (isPlaylist(a.feed_id)) {
+        setView("youtube");
+        setScope({ feed_id: a.feed_id });
+      } else if (!scope.feed_id && !scope.folder_id)
         setScope({ feed_id: a.feed_id });
     }
   }, [a]);
@@ -680,7 +702,9 @@ function App() {
     if (
       data &&
       scope.feed_id &&
-      !data.feeds.some((f) => f.id === scope.feed_id)
+      ![...data.feeds, ...(data.playlists || [])].some(
+        (f) => f.id === scope.feed_id,
+      )
     )
       setScope({});
   }, [data, scope.feed_id]);
@@ -736,6 +760,7 @@ function App() {
     setSelected(item.id);
     setFocused(item.id);
     setLoadImages(false);
+    setVideoStart(null);
     run("change_articles", { ids: [item.id], opened: true });
   }
   function navigate(delta) {
@@ -1015,6 +1040,7 @@ function App() {
   const paneShown =
     view === "all" ||
     view === "bookmarks" ||
+    view === "youtube" ||
     !!scope.feed_id ||
     !!scope.folder_id;
   const sidebarSize = Math.max(
@@ -1205,6 +1231,14 @@ function App() {
           data.counts.reading,
         ],
         [
+          "youtube",
+          ListVideo,
+          "YouTube",
+          () => stream("youtube"),
+          onStream("youtube"),
+          data.counts.youtube,
+        ],
+        [
           "history",
           Clock3,
           "History",
@@ -1254,7 +1288,7 @@ function App() {
       {paneShown && (
         <aside className="sidebar" aria-label="Feeds">
           <div className="subscriptions-heading">
-            <h2>FEEDS</h2>
+            <h2>{view === "youtube" ? "PLAYLISTS" : "FEEDS"}</h2>
             <IconButton
               icon={settings.sidebar_unread_only ? EyeOff : Eye}
               label={
@@ -1269,7 +1303,34 @@ function App() {
             />
           </div>
           <div className="folder-tree" onScroll={showScrollbar}>
-            {paneFeeds.length ? (
+            {view === "youtube" ? (
+              data.playlists.length ? (
+                data.playlists
+                  .filter((f) => shown(f))
+                  .map((f) => (
+                    <button
+                      key={f.id}
+                      className={
+                        "feed-line playlist-line " +
+                        (scope.feed_id === f.id ? "active" : "")
+                      }
+                      onClick={() => stream("youtube", { feed_id: f.id })}
+                      {...middleClick("/youtube/f/" + f.id)}
+                    >
+                      <ListVideo size={16} />
+                      <span onMouseEnter={fullOnHover}>{f.title}</span>
+                      <span className="count" data-unread={f.unread}>
+                        {f.unread || ""}
+                      </span>
+                    </button>
+                  ))
+              ) : (
+                <p className="pane-empty">
+                  No playlists yet. Turn on “Sync YouTube playlists” in the
+                  Feedelio Chrome extension, while signed in to YouTube.
+                </p>
+              )
+            ) : paneFeeds.length ? (
               folderTree()
             ) : paneView === "bookmarks" ? (
               <p className="pane-empty">
@@ -1351,7 +1412,26 @@ function App() {
               {articles.data?.unread || 0} unread
             </span>
             <div className="stream-controls">
-              {view !== "reading" && (
+              {isPlaylist(scope.feed_id) && (
+                <IconButton
+                  icon={Trash2}
+                  label={"Stop keeping the playlist " + heading}
+                  onClick={() => {
+                    if (
+                      confirm(
+                        `Stop keeping “${heading}”? Its videos leave Feedelio and later syncs skip it. You can undo this change.`,
+                      )
+                    ) {
+                      run("bulk_feeds", {
+                        ids: [scope.feed_id],
+                        action: "delete",
+                      });
+                      stream("youtube");
+                    }
+                  }}
+                />
+              )}
+              {view !== "reading" && view !== "youtube" && (
                 <UpdateNow
                   data={data}
                   act={run}
@@ -1463,20 +1543,24 @@ function App() {
                   ? "No matches yet"
                   : view === "reading"
                     ? "Nothing on your reading list."
-                    : data.feeds.length
-                      ? "A quiet moment."
-                      : "A fresh start."}
+                    : view === "youtube"
+                      ? "No saved videos yet."
+                      : data.feeds.length
+                        ? "A quiet moment."
+                        : "A fresh start."}
               </h3>
               <p>
                 {q
                   ? "Try a different word or turn off unread only."
                   : view === "reading"
                     ? "Pages you add to Chrome’s Reading List show here, through the Feedelio companion extension (Manage library → Import & export)."
-                    : data.feeds.length
-                      ? "You’re all caught up here. New articles will arrive automatically."
-                      : "The things you love to read will find a home here."}
+                    : view === "youtube"
+                      ? "Your YouTube playlists, Watch Later included, show here through the Feedelio companion extension. Each video is kept even if YouTube later removes it."
+                      : data.feeds.length
+                        ? "You’re all caught up here. New articles will arrive automatically."
+                        : "The things you love to read will find a home here."}
               </p>
-              {!data.feeds.length && view !== "reading" && (
+              {!data.feeds.length && !["reading", "youtube"].includes(view) && (
                 <button onClick={() => setModal("subscribe")}>
                   Add a subscription <ArrowUpRight size={14} />
                 </button>
@@ -1522,8 +1606,16 @@ function App() {
                     <button
                       className="row-feed"
                       onMouseEnter={fullOnHover}
-                      onClick={() => stream("all", { feed_id: item.feed_id })}
-                      {...middleClick("/f/" + item.feed_id)}
+                      onClick={() =>
+                        isPlaylist(item.feed_id)
+                          ? stream("youtube", { feed_id: item.feed_id })
+                          : stream("all", { feed_id: item.feed_id })
+                      }
+                      {...middleClick(
+                        (isPlaylist(item.feed_id) ? "/youtube" : "") +
+                          "/f/" +
+                          item.feed_id,
+                      )}
                     >
                       {item.feed_title}
                     </button>
@@ -1536,7 +1628,16 @@ function App() {
                   // Middle click opens the original in a new tab, like a link.
                   {...middleClick(item.url)}
                 >
+                  {item.meta?.thumbnail && (
+                    <img
+                      className="row-thumb"
+                      src={"/api/thumbs/" + item.meta.video_id}
+                      alt=""
+                      loading="lazy"
+                    />
+                  )}
                   <ArticleMarks item={item} />
+                  <VideoStatus meta={item.meta} />
                   <Highlight text={item.title} query={q} />
                 </button>
                 <time
@@ -1642,8 +1743,16 @@ function App() {
                       </span>
                     ) : (
                       <button
-                        onClick={() => stream("all", { feed_id: a.feed_id })}
-                        {...middleClick("/f/" + a.feed_id)}
+                        onClick={() =>
+                          isPlaylist(a.feed_id)
+                            ? stream("youtube", { feed_id: a.feed_id })
+                            : stream("all", { feed_id: a.feed_id })
+                        }
+                        {...middleClick(
+                          (isPlaylist(a.feed_id) ? "/youtube" : "") +
+                            "/f/" +
+                            a.feed_id,
+                        )}
                       >
                         {a.feed_title}
                       </button>
@@ -1685,16 +1794,64 @@ function App() {
                     </span>
                   </div>
                   <hr className="reader-rule" />
-                  {a.embed && (
-                    <div className="video-box">
-                      <iframe
-                        title={a.title}
-                        src={a.embed}
-                        allow="fullscreen; picture-in-picture"
-                        allowFullScreen
-                        referrerPolicy="strict-origin-when-cross-origin"
+                  {a.meta?.unavailable && a.meta.thumbnail ? (
+                    <figure className="video-box video-gone">
+                      <img
+                        src={"/api/thumbs/" + a.meta.video_id}
+                        alt={"Thumbnail of " + a.title}
                       />
-                    </div>
+                      <figcaption>
+                        No longer on YouTube · noticed{" "}
+                        {fullDate(a.meta.unavailable)}
+                      </figcaption>
+                    </figure>
+                  ) : a.meta?.unavailable ? (
+                    <p className="video-gone-note">
+                      No longer on YouTube · noticed{" "}
+                      {fullDate(a.meta.unavailable)}
+                    </p>
+                  ) : (
+                    a.embed && (
+                      <div className="video-box">
+                        <iframe
+                          title={a.title}
+                          key={videoStart ?? "start"}
+                          src={
+                            a.embed +
+                            (videoStart != null
+                              ? "?start=" + videoStart + "&autoplay=1"
+                              : "")
+                          }
+                          allow="autoplay; fullscreen; picture-in-picture"
+                          allowFullScreen
+                          referrerPolicy="strict-origin-when-cross-origin"
+                        />
+                      </div>
+                    )
+                  )}
+                  {a.meta?.left_playlist && (
+                    <p className="video-gone-note">
+                      Removed from the playlist on YouTube ·{" "}
+                      {fullDate(a.meta.left_playlist)}
+                    </p>
+                  )}
+                  {!!a.meta?.chapters?.length && (
+                    <section className="chapters" aria-label="Chapters">
+                      <h2>Chapters</h2>
+                      <ol>
+                        {a.meta.chapters.map((c) => (
+                          <li key={c.start}>
+                            <button
+                              disabled={!!a.meta.unavailable}
+                              onClick={() => setVideoStart(c.start)}
+                            >
+                              <time>{clock(c.start)}</time>
+                              {c.title}
+                            </button>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
                   )}
                   {a.enclosures
                     .filter((e) => (e.type || "").startsWith("audio/"))
@@ -1763,6 +1920,13 @@ function App() {
                         Fetch full article <ArrowUpRight size={16} />
                       </button>
                     </div>
+                  )}
+                  {!!a.meta?.keywords?.length && (
+                    <ul className="video-keywords" aria-label="YouTube tags">
+                      {a.meta.keywords.map((k) => (
+                        <li key={k}>{k}</li>
+                      ))}
+                    </ul>
                   )}
                   {a.transcript && (
                     <section className="transcript">

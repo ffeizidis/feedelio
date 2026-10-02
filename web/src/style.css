@@ -1222,6 +1222,26 @@ dialog::backdrop {
 .row-marks svg {
   stroke-width: 2.25;
 }
+.row-thumb {
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  margin-right: var(--space-2);
+  object-fit: cover;
+  border-radius: 3px;
+  vertical-align: -4px;
+  background: var(--raised-2);
+}
+.video-status {
+  margin-right: var(--space-2);
+  padding: 1px var(--space-2);
+  font: var(--text-xs) var(--sans);
+  font-weight: 500;
+  color: var(--gold);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  vertical-align: 1px;
+}
 .row-date {
   font: var(--text-base) / 1 var(--mono);
   color: var(--dim);
@@ -1541,6 +1561,80 @@ dialog::backdrop {
   width: 100%;
   height: 100%;
   border: 0;
+}
+.video-gone {
+  position: relative;
+  margin-inline: 0;
+}
+.video-gone img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: grayscale(0.6);
+}
+.video-gone figcaption {
+  position: absolute;
+  inset: auto 0 0;
+  padding: var(--space-2) var(--space-3);
+  font: var(--text-sm) var(--sans);
+  color: #fff;
+  background: rgb(0 0 0 / 0.65);
+}
+.video-gone-note {
+  margin: 0 0 var(--space-6);
+  padding: var(--space-3);
+  font: var(--text-sm) var(--sans);
+  color: var(--muted);
+  background: var(--raised-2);
+  border-radius: var(--radius-md);
+}
+.chapters {
+  margin-bottom: var(--space-8);
+  font-family: var(--sans);
+}
+.chapters h2,
+.video-keywords + .transcript h2 {
+  font-size: 1.1em;
+}
+.chapters ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chapters button {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--control);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-base);
+  text-align: left;
+  border-radius: var(--radius-sm);
+}
+.chapters button:hover:not(:disabled) {
+  background: var(--raised-2);
+}
+.chapters time {
+  min-width: 8ch;
+  font: var(--text-sm) var(--mono);
+  color: var(--dim);
+  line-height: 1.6;
+}
+.video-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-6) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.video-keywords li {
+  padding: 2px var(--space-2);
+  font: var(--text-xs) var(--sans);
+  color: var(--muted);
+  background: var(--raised-2);
+  border-radius: var(--radius-pill);
 }
 .podcast {
   padding: var(--space-5);

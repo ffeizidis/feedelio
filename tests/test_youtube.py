@@ -80,6 +80,12 @@ def test_a_video_that_leaves_its_playlist_is_kept_and_marked(core):
     assert all("left_playlist" not in a["meta"] for a in saved(core, "PLx"))
 
 
+def test_a_playlist_read_only_in_part_marks_nothing_as_left(core):
+    core.youtube_sync([playlist("PLx", "List", video(1), video(2))])
+    core.youtube_sync([dict(playlist("PLx", "List", video(2)), partial=True)])
+    assert all("left_playlist" not in a["meta"] for a in saved(core, "PLx"))
+
+
 def test_a_video_youtube_took_down_keeps_what_was_stored(core):
     core.youtube_sync([playlist("PLx", "List", video(1))])
     taken_down = video(1, title="[Deleted video]", channel="", unavailable=True)

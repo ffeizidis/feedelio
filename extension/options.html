@@ -30,9 +30,22 @@
           above. Read changes sync in both directions, and removing a page from
           the Reading List removes it from Feedelio.
         </p>
+        <label class="check"
+          ><input id="youtube" type="checkbox" />Sync YouTube playlists every
+          half hour</label
+        >
+        <p>
+          Your playlists, Watch Later included, are read with your YouTube
+          sign-in in this browser. Only playlist and video ids and titles are
+          sent to the server above; your sign-in never leaves the browser.
+          Feedelio keeps each video's details, thumbnail and transcript, even if
+          YouTube later removes the video.
+        </p>
         <button>Save & sync</button>
       </form>
       <p id="status" role="status"></p>
+      <p id="youtube-status" role="status"></p>
+      <button id="youtube-now" type="button">Sync YouTube now</button>
     </main>
     <script src="options.js" type="module"></script>
   </body>

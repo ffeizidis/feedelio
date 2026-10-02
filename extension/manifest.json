@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "minimum_chrome_version": "120",
   "name": "Feedelio companion",
-  "version": "0.2.2",
-  "description": "Subscribe to the current page and sync your Chrome Reading List with your private Feedelio server.",
+  "version": "0.3.0",
+  "description": "Subscribe to the current page and sync your Chrome Reading List and YouTube playlists with your private Feedelio server.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -14,16 +14,16 @@
     "activeTab",
     "readingList",
     "alarms",
-    "storage"
+    "storage",
+    "cookies",
+    "declarativeNetRequestWithHostAccess"
   ],
   "host_permissions": [
     "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*"
+    "http://127.0.0.1:8000/*",
+    "https://www.youtube.com/*"
   ],
-  "optional_host_permissions": [
-    "https://*/*",
-    "http://*/*"
-  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": {
     "service_worker": "background.js",
     "type": "module"

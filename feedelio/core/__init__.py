@@ -2548,6 +2548,9 @@ class Core:
                     with self.db:
                         self.db.execute("UPDATE articles SET meta=? WHERE id=?", (json.dumps(meta), a["id"]))
             # The whole playlist was sent, so a video missing from it has left it.
+            # (One the extension could read only part of says nothing about that.)
+            if p.get("partial"):
+                continue
             with self.db:
                 for a in self.rows(
                     "SELECT id,guid,meta FROM articles WHERE feed_id=? AND deleted=0", (feed_id,)

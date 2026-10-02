@@ -320,3 +320,19 @@ def test_the_watch_pages_caption_link_is_the_fallback(core, youtube):
     core.youtube_sync([playlist("PLx", "List", video(1))])
     run_jobs(core)
     assert core.rows("SELECT transcript FROM articles")[0]["transcript"] == "From the page."
+
+
+def test_videos_kept_before_the_caption_fix_are_tried_again(core, youtube):
+    core.youtube_sync([playlist("PLx", "List", video(1), video(2))])
+    run_jobs(core)
+    with core.db:  # As kept by the earlier way: no transcript, no marker.
+        core.db.execute("UPDATE articles SET transcript='',meta=json_remove(meta,'$.captions')")
+    core.captions_retried.discard(core.root)
+    core.schedule()
+    queued = core.rows("SELECT payload FROM jobs WHERE kind='video' AND status='queued'")
+    assert sorted(j["payload"]["video_id"] for j in queued) == ["video000001", "video000002"]
+    run_jobs(core)
+    assert all(a["transcript"] for a in core.rows("SELECT transcript FROM articles"))
+    core.captions_retried.discard(core.root)
+    core.schedule()  # Done once: nothing more to try.
+    assert not core.rows("SELECT 1 FROM jobs WHERE kind='video' AND status='queued'")

@@ -48,6 +48,11 @@ def site():
             self.end_headers()
             self.wfile.write(body if isinstance(body, bytes) else body.encode())
 
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.path = "POST " + self.path
+            self.do_GET()
+
         def log_message(self, *_):
             pass
 

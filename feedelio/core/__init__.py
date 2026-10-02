@@ -42,6 +42,7 @@ from . import backfill as archives
 from .content import (
     UnresolvedHost,
     bounded,
+    caption_text,
     clean_url,
     embed_url,
     extract,
@@ -59,6 +60,7 @@ from .content import (
     same_feed,
     sanitize,
     text_html,
+    video_captions,
     video_id,
 )
 from .network import PinnedAdapter, http_client
@@ -2583,12 +2585,17 @@ class Core:
             (guid, YOUTUBE),
         )
         transcript = stored[0]["transcript"] if stored else ""
-        if video["title"] and video["captions"] and not transcript:
+        if video["title"] and not transcript:
             try:
-                raw, _, _ = fetch(video["captions"], options)
-                transcript = plain(raw.decode("utf-8", errors="replace"))
+                transcript = video_captions(video_id, video["api_key"], options)
             except (httpx.HTTPError, ValueError):
-                pass  # Captions can need a token YouTube hands only to its player.
+                pass
+            if not transcript and video["captions"]:
+                try:  # The page's own link, for when the app's is refused.
+                    raw, _, _ = fetch(video["captions"], options)
+                    transcript = caption_text(raw.decode("utf-8", errors="replace"))
+                except (httpx.HTTPError, ValueError):
+                    pass
         thumbnail = self.thumbnail_path(video_id)
         if video["title"] and not thumbnail.exists():
             for url in filter(None, (video["thumbnail"], f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg")):

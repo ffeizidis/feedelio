@@ -370,8 +370,46 @@ def watch_page_details(text):
         else "",
         chapters=page_chapters(text) or description_chapters(description),
         captions=tracks[0]["baseUrl"] if tracks else "",
+        api_key=(regex.search(r'"INNERTUBE_API_KEY":"([\w-]+)"', text) or [None, ""])[1],
         status=str((player.get("playabilityStatus") or {}).get("status") or ""),
     )
+
+
+def video_captions(id, api_key, options=None):
+    """A video's captions as text, written ones before automatic ones.
+
+    The caption links on a watch page now need a token only YouTube's own
+    player makes, and come back empty; the ones its Android app is given do not.
+    """
+    with http_client(options, timeout=30) as client:
+        response = client.post(
+            f"{YOUTUBE}/youtubei/v1/player?key={api_key}",
+            json={
+                "context": {"client": {"clientName": "ANDROID", "clientVersion": "20.10.38"}},
+                "videoId": id,
+            },
+            headers=request_headers(options),
+        )
+        response.raise_for_status()
+        player = response.json()
+        tracks = ((player.get("captions") or {}).get("playerCaptionsTracklistRenderer") or {}).get(
+            "captionTracks"
+        ) or []
+        tracks = sorted((t for t in tracks if t.get("baseUrl")), key=lambda t: t.get("kind") == "asr")
+        if not tracks:
+            return ""
+        url = tracks[0]["baseUrl"].replace("&fmt=srv3", "")
+        safe_url(url)
+        return caption_text(client.get(url, headers=request_headers(options)).text)
+
+
+def caption_text(xml):
+    """Timed-text XML as plain lines; its text is escaped twice."""
+    lines = (
+        html.unescape(html.unescape(regex.sub(r"<[^>]+>", "", m.group(1)))).strip()
+        for m in regex.finditer(r"<text[^>]*>(.*?)</text>", xml, flags=regex.S)
+    )
+    return "\n".join(line for line in lines if line)
 
 
 def embedded_json(text, prefix):

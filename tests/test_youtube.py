@@ -142,8 +142,8 @@ def watch_page(base, n, captions=True):
         "captions": {
             "playerCaptionsTracklistRenderer": {
                 "captionTracks": [
-                    {"baseUrl": f"{base}/captions-auto", "kind": "asr"},
-                    {"baseUrl": f"{base}/captions"},
+                    # The page's own links need a token now, and come back empty.
+                    {"baseUrl": f"{base}/page-captions"},
                 ]
                 if captions
                 else []
@@ -158,6 +158,7 @@ def watch_page(base, n, captions=True):
     <meta itemprop="name" content="Real title {n}">
     <meta itemprop="duration" content="PT12M5S">
     <meta itemprop="datePublished" content="2024-05-01T10:00:00-07:00">
+    <script>ytcfg.set({{"INNERTUBE_API_KEY":"key"}});</script>
     </head><body><script>var ytInitialPlayerResponse = {json.dumps(player)};</script>
     <script>var ytInitialData = {json.dumps({"markers": chapters})};</script></body></html>"""
 
@@ -173,12 +174,28 @@ def youtube(site, monkeypatch):
     for n in (1, 2):
         routes[f"/watch?v=video{n:06d}"] = (200, {"Content-Type": "text/html"}, watch_page(base, n))
     routes["/big.jpg"] = (200, {"Content-Type": "image/jpeg"}, JPEG)
-    routes["/captions"] = (
+    app_player = {
+        "captions": {
+            "playerCaptionsTracklistRenderer": {
+                "captionTracks": [
+                    {"baseUrl": f"{base}/captions-auto?lang=en&fmt=srv3", "kind": "asr"},
+                    {"baseUrl": f"{base}/captions?lang=en&fmt=srv3"},
+                ]
+            }
+        }
+    }
+    routes["POST /youtubei/v1/player?key=key"] = (
+        200,
+        {"Content-Type": "application/json"},
+        json.dumps(app_player),
+    )
+    routes["/page-captions"] = (200, {"Content-Type": "text/html"}, "")
+    routes["/captions?lang=en"] = (
         200,
         {"Content-Type": "text/xml"},
-        "<transcript><text>Knead the dough.</text></transcript>",
+        '<transcript><text start="0">Knead the dough.</text><text start="2">It&amp;#39;s soft.</text></transcript>',
     )
-    routes["/captions-auto"] = (
+    routes["/captions-auto?lang=en"] = (
         200,
         {"Content-Type": "text/xml"},
         "<transcript><text>uh knead</text></transcript>",
@@ -198,7 +215,8 @@ def test_a_saved_video_is_preserved_with_its_details(core, youtube):
     assert a["title"] == "Real title 1" and a["author"] == "The channel"
     assert a["published"].startswith("2024-05-01T17:00") and a["duration"] == 725
     assert "About video 1." in a["body"] and 'href="https://example.org/recipe"' in a["body"]
-    assert a["transcript"] == "Knead the dough."  # Written captions over automatic ones.
+    # Written captions over automatic ones, unescaped as often as YouTube escapes them.
+    assert a["transcript"] == "Knead the dough.\nIt's soft."
     meta = a["meta"]
     assert meta["keywords"] == ["cooking", "bread"] and meta["category"] == "Howto & Style"
     assert meta["chapters"] == [
@@ -289,3 +307,16 @@ def test_chapters_from_the_description_when_youtube_lists_none():
     ]
     assert content.description_chapters("1:00 Not from the start\n2:00 b\n3:00 c") == []
     assert content.description_chapters("0:00 a\n1:00 b") == []  # Fewer than three.
+
+
+def test_the_watch_pages_caption_link_is_the_fallback(core, youtube):
+    _, routes, _ = youtube
+    del routes["POST /youtubei/v1/player?key=key"]
+    routes["/page-captions"] = (
+        200,
+        {"Content-Type": "text/xml"},
+        "<transcript><text>From the page.</text></transcript>",
+    )
+    core.youtube_sync([playlist("PLx", "List", video(1))])
+    run_jobs(core)
+    assert core.rows("SELECT transcript FROM articles")[0]["transcript"] == "From the page."

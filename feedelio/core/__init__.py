@@ -121,6 +121,8 @@ PLAYLIST = "yt-"
 VIDEO_ID = regex.compile(r"[\w-]{11}")
 PLAYLIST_ID = regex.compile(r"[\w-]{2,64}")
 RECHECK_PER_HOUR = 50
+# How captions are fetched; a video kept by an older way is tried again.
+CAPTIONS = 2
 # How YouTube's player says a video is no longer watchable.
 GONE = ("ERROR", "UNPLAYABLE", "LOGIN_REQUIRED")
 THUMBNAIL_BYTES = 2_000_000
@@ -374,6 +376,7 @@ class Core:
     # Schema and one-off migrations run once per process per data directory, so
     # opening a Core is a plain connect and never waits on a concurrent writer.
     initialised = set()
+    captions_retried = set()
     # CSP frame sources per data directory; cleared by save_settings and restore.
     # Only the API process changes settings, so a second API process would need
     # its own invalidation.
@@ -2068,6 +2071,20 @@ class Core:
             (now(days=-1),),
         ):
             self.enqueue("purge")
+        # Videos kept before captions could be fetched again get another try,
+        # once per worker start rather than waiting for the weekly look.
+        if self.root not in Core.captions_retried:
+            Core.captions_retried.add(self.root)
+            with self.db:
+                for v in self.rows(
+                    f"""SELECT DISTINCT json_extract(a.meta,'$.video_id') video_id {ARTICLES}
+                    WHERE f.folder_id=? AND f.deleted=0 AND a.deleted=0 AND a.transcript=''
+                    AND json_extract(a.meta,'$.checked') IS NOT NULL
+                    AND json_extract(a.meta,'$.unavailable') IS NULL
+                    AND coalesce(json_extract(a.meta,'$.captions'),0)<?""",
+                    (YOUTUBE, CAPTIONS),
+                ):
+                    self._enqueue("video", {"video_id": v["video_id"]})
         # Saved videos are looked at again weekly, so one YouTube takes down is
         # marked even while it stays in its playlist; a few each hour.
         if self.settings()["youtube_checked"] < now(hours=-1):
@@ -2612,7 +2629,7 @@ class Core:
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             for a in self.rows(f"SELECT a.* {ARTICLES} WHERE a.guid=? AND f.folder_id=?", (guid, YOUTUBE)):
-                meta = dict(a["meta"], checked=stamp)
+                meta = dict(a["meta"], checked=stamp, captions=CAPTIONS)
                 if not video["title"]:  # Removed, private or blocked: keep the copy.
                     meta.setdefault("unavailable", stamp)
                 else:

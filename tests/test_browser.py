@@ -1,5 +1,6 @@
 """Desktop acceptance test against the built React app and the real API."""
 
+import base64
 import json
 import re
 import socket
@@ -922,4 +923,79 @@ def test_the_feed_list_sorts_by_any_column_and_shows_when_each_feed_was_added(co
 
         page.get_by_role("button", name="Edit Beta", exact=True).click()
         expect(page).to_have_url(web_server + "/library/feeds/" + newer)
+        browser.close()
+
+
+PIXEL = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+def test_saved_youtube_playlists_have_their_own_view_and_keep_lost_videos(core, web_server):
+    core.youtube_sync(
+        [
+            {
+                "id": "PLbread",
+                "title": "Bread",
+                "videos": [
+                    {"id": "video000001", "title": "Sourdough", "channel": "Baker"},
+                    {"id": "video000002", "title": "Rye", "channel": "Baker"},
+                ],
+            },
+            {"id": "WL", "title": "Watch later", "videos": []},
+        ]
+    )
+    chapters = [{"start": 0, "title": "Intro"}, {"start": 65, "title": "Dough"}]
+    for n, extra in ((1, {}), (2, {"unavailable": now()})):
+        core.thumbnail_path(f"video00000{n}").write_bytes(PIXEL)
+        meta = {"video_id": f"video00000{n}", "position": n - 1, "checked": now(), "thumbnail": True}
+        meta |= {"chapters": chapters, "keywords": ["baking"], **extra}
+        with core.db:
+            core.db.execute(
+                "UPDATE articles SET meta=?,body='<p>About bread.</p>' WHERE guid=?",
+                (json.dumps(meta), f"yt:video:video00000{n}"),
+            )
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(web_server)
+        expect(page.locator(".article-row")).to_have_count(0)  # Not among the subscriptions.
+        youtube = page.get_by_role("navigation", name="Streams").get_by_role(
+            "button", name="YouTube", exact=True
+        )
+        expect(youtube.locator(".badge")).to_have_text("2")
+        youtube.click()
+        expect(page).to_have_url(web_server + "/youtube")
+        expect(page.locator(".sidebar h2")).to_have_text("PLAYLISTS")
+        expect(page.locator(".playlist-line")).to_have_text([re.compile("Bread"), re.compile("Watch later")])
+        page.locator(".playlist-line", has_text="Bread").click()
+        expect(page).to_have_url(web_server + "/youtube/f/yt-PLbread")
+        expect(page.locator(".list-heading h1")).to_have_text("Bread")
+        rows = page.locator(".article-row")
+        expect(rows).to_have_count(2)
+        thumb = rows.first.locator(".row-thumb")
+        expect(thumb).to_be_visible()
+        assert page.evaluate("img => img.naturalWidth", thumb.element_handle()) == 1
+        expect(page.locator(".article-row", has_text="Rye").locator(".video-status")).to_have_text(
+            "Unavailable"
+        )
+
+        page.locator(".row-title", has_text="Sourdough").click()
+        frame = page.locator(".video-box iframe")
+        expect(frame).to_have_attribute("src", re.compile(r"/embed/video000001$"))
+        page.get_by_role("button", name=re.compile("Dough")).click()
+        expect(frame).to_have_attribute("src", re.compile(r"/embed/video000001\?start=65&autoplay=1$"))
+        expect(page.locator(".video-keywords li")).to_have_text(["baking"])
+
+        page.locator(".row-title", has_text="Rye").click()
+        expect(page.locator(".video-box iframe")).to_have_count(0)
+        gone = page.locator(".video-gone")
+        expect(gone.locator("figcaption")).to_contain_text("No longer on YouTube")
+        assert page.evaluate("img => img.naturalWidth", gone.locator("img").element_handle()) == 1
+        expect(page.locator(".prose")).to_contain_text("About bread.")
+
+        # A reload of the playlist's address lands on it again.
+        page.goto(web_server + "/youtube/f/yt-PLbread")
+        expect(page.locator(".playlist-line.active")).to_have_text(re.compile("Bread"))
         browser.close()

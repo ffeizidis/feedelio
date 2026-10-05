@@ -93,3 +93,22 @@ def test_older_folder_rows_still_restore(core, tmp_path):
     with Core(tmp_path / "other") as other:
         other.restore(backup)
         assert {f["section"] for f in other.folders()} == {""}
+
+
+def test_a_youtube_channel_page_is_found_past_the_consent_page(core, site, monkeypatch):
+    base, routes, requests = site
+    monkeypatch.setattr("feedelio.core.is_youtube", lambda url: url.startswith(base))
+    routes["/@films"] = (
+        200,
+        {"Content-Type": "text/html"},
+        '<html><head><meta property="og:title" content="Films">'
+        '<script>var ytInitialData = {"metadata":{"externalId":"UCabcdefghijklmnopqrstuv"}}</script></head></html>',
+    )
+    assert core.discover(base + "/@films") == [
+        {
+            "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCabcdefghijklmnopqrstuv",
+            "title": "Films",
+            "kind": "videos",
+        }
+    ]
+    assert requests[-1][1]["Cookie"] == "SOCS=CAI"

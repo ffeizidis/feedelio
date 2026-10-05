@@ -613,7 +613,13 @@ export function FolderSelect({
   onChange,
   exclude = new Set(),
   top,
+  section,
 }) {
+  // Given a page, only its folders are offered, and a new one is made there.
+  const folders =
+    section === undefined
+      ? data.folders
+      : data.folders.filter((f) => f.section === section);
   const [creating, setCreating] = useState(false),
     [draft, setDraft] = useState(""),
     { error, submit } = useSubmit();
@@ -622,7 +628,11 @@ export function FolderSelect({
     const created = await submit(() =>
       act(
         "save_folder",
-        { name: draft.trim(), parent_id: null },
+        {
+          name: draft.trim(),
+          parent_id: null,
+          ...(section ? { section } : {}),
+        },
         "Folder created",
       ),
     );
@@ -639,7 +649,7 @@ export function FolderSelect({
         value={value}
         options={[
           ...(top ? [{ value: "", label: "Top level" }] : []),
-          ...folderOptions(data.folders, exclude),
+          ...folderOptions(folders, exclude),
           { value: "+", label: "+ New folder…" },
         ]}
         onChange={(v) => (v === "+" ? setCreating(true) : onChange(v))}
@@ -695,6 +705,9 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
                   ...(folder ? { id: folder.id } : {}),
                   name: values.get("name"),
                   parent_id: values.get("parent") || null,
+                  ...(values.get("parent")
+                    ? {}
+                    : { section: values.get("section") || "" }),
                 },
                 "Folder saved",
               ),
@@ -723,6 +736,23 @@ export function FolderSheet({ data, act, onClose, folder, Modal, Field }) {
             top
           />
         </Field>
+        {!parent && (
+          <Field
+            label="Show on"
+            hint="A folder for videos or podcasts gets a page of its own, with its subfolders, apart from All articles."
+          >
+            <Select
+              name="section"
+              label="Show on"
+              defaultValue={folder?.kind || ""}
+              options={[
+                { value: "", label: "All articles" },
+                { value: "videos", label: "Videos page" },
+                { value: "podcasts", label: "Podcasts page" },
+              ]}
+            />
+          </Field>
+        )}
         {error && <p role="alert">{error}</p>}
         <div className="sheet-actions">
           {folder && (

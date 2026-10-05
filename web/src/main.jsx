@@ -55,6 +55,7 @@ import {
   Pencil,
   Filter,
   ListVideo,
+  MonitorPlay,
 } from "lucide-react";
 import "./style.css";
 import "@fontsource/italianno/latin-400.css";
@@ -96,10 +97,20 @@ const TRAY_WIDTH = 64;
 const READING_LIST = "chrome";
 // Each saved YouTube playlist is a feed with this prefix, in a view of its own.
 const isPlaylist = (id) => (id || "").startsWith("yt-");
+// Top-level folders for videos or podcasts make pages of their own, apart
+// from All articles; their subfolders and feeds go with them.
+const SECTIONS = ["videos", "podcasts"];
+// The stream a feed belongs to: its page, or All articles.
+const feedView = (data, id) => {
+  if (isPlaylist(id)) return "youtube";
+  const folder = data?.feeds.find((f) => f.id === id)?.folder_id;
+  return data?.folders.find((f) => f.id === folder)?.section || "all";
+};
 // The address names the page, so a reload or a shared link lands on the same
 // stream or article: /f/<feed>, /d/<folder>, /starred, /bookmarks, /reading,
-// /youtube, /history, /a/<article>; a bookmarked feed or folder is
-// /bookmarks/f/<feed> or /bookmarks/d/<folder>, and a playlist /youtube/f/<id>.
+// /videos, /podcasts, /youtube, /history, /a/<article>; a feed or folder on
+// another page is under it, as /bookmarks/f/<feed>, /podcasts/d/<folder> or
+// /youtube/f/<playlist>.
 const LIBRARY_TABS = [
   "feeds",
   "folders",
@@ -121,21 +132,35 @@ function readLocation() {
   if (kind === "a" && id) return { selected: id };
   if (kind === "f" && id) return { view: "all", scope: { feed_id: id } };
   if (kind === "d" && id) return { view: "all", scope: { folder_id: id } };
-  if (kind === "bookmarks" && feed && (id === "f" || id === "d"))
+  if (
+    ["bookmarks", ...SECTIONS].includes(kind) &&
+    feed &&
+    (id === "f" || id === "d")
+  )
     return {
       view: kind,
       scope: id === "f" ? { feed_id: feed } : { folder_id: feed },
     };
   if (kind === "youtube" && id === "f" && feed)
     return { view: kind, scope: { feed_id: feed } };
-  if (["starred", "bookmarks", "reading", "youtube", "history"].includes(kind))
+  if (
+    [
+      "starred",
+      "bookmarks",
+      "reading",
+      "youtube",
+      "history",
+      ...SECTIONS,
+    ].includes(kind)
+  )
     return { view: kind };
   return {};
 }
 function pageUrl(selected, view, scope) {
   if (selected) return "/a/" + selected;
-  const within =
-    view === "bookmarks" ? "/bookmarks" : view === "youtube" ? "/youtube" : "";
+  const within = ["bookmarks", "youtube", ...SECTIONS].includes(view)
+    ? "/" + view
+    : "";
   if (scope.feed_id) return within + "/f/" + scope.feed_id;
   if (scope.folder_id) return within + "/d/" + scope.folder_id;
   return view === "all" ? "/" : "/" + view;
@@ -301,6 +326,8 @@ const VIEW_TITLES = {
   starred: "Saved for later",
   bookmarks: "Bookmarked feeds",
   reading: "Reading list",
+  videos: "Videos",
+  podcasts: "Podcasts",
   youtube: "YouTube",
   history: "Recently read",
 };
@@ -690,8 +717,8 @@ function App() {
     if (!placed.current && a && a.id === start.selected) {
       placed.current = true;
       if (a.feed_id === READING_LIST) setView("reading");
-      else if (isPlaylist(a.feed_id)) {
-        setView("youtube");
+      else if (feedView(data, a.feed_id) !== "all") {
+        setView(feedView(data, a.feed_id));
         setScope({ feed_id: a.feed_id });
       } else if (!scope.feed_id && !scope.folder_id)
         setScope({ feed_id: a.feed_id });
@@ -1035,12 +1062,16 @@ function App() {
   // The feeds pane belongs to the streams a feed list can narrow; the tray
   // to its left is always there.
   // Bookmarked feeds narrows like All articles, over bookmarked feeds only.
-  const paneView = view === "bookmarks" ? "bookmarks" : "all";
-  const inPane = (f) => paneView === "all" || !!f.options.bookmarked;
+  // Each page of videos or podcasts narrows over its own folders the same way.
+  const paneView = ["bookmarks", ...SECTIONS].includes(view) ? view : "all";
+  const sectionOf = (folderId) =>
+    data.folders.find((f) => f.id === folderId)?.section || "";
+  const inPane = (f) =>
+    paneView === "bookmarks"
+      ? !!f.options.bookmarked
+      : sectionOf(f.folder_id) === (paneView === "all" ? "" : paneView);
   const paneShown =
-    view === "all" ||
-    view === "bookmarks" ||
-    view === "youtube" ||
+    ["all", "bookmarks", "youtube", ...SECTIONS].includes(view) ||
     !!scope.feed_id ||
     !!scope.folder_id;
   const sidebarSize = Math.max(
@@ -1085,7 +1116,7 @@ function App() {
     return false;
   };
   const folderUnread = (folder) =>
-    paneView === "all"
+    paneView !== "bookmarks"
       ? folder.unread
       : paneFeeds
           .filter((f) => within(f, folder.id))
@@ -1095,7 +1126,9 @@ function App() {
       .filter(
         (f) =>
           f.parent_id === parent &&
-          (paneView === "all" || paneFeeds.some((x) => within(x, f.id))) &&
+          (paneView === "bookmarks"
+            ? paneFeeds.some((x) => within(x, f.id))
+            : f.section === (paneView === "all" ? "" : paneView)) &&
           (!unreadOnly || folderUnread(f) > 0 || keep.has(f.id)),
       )
       .map((f) => (
@@ -1130,39 +1163,51 @@ function App() {
           {!collapsed["nav" + f.id] && (
             <>
               {folderTree(f.id, depth + 1)}
-              {data.feeds
-                .filter((x) => x.folder_id === f.id && shown(x))
-                .map((f) => (
-                  <button
-                    key={f.id}
-                    className={
-                      "feed-line " +
-                      feedClass(f) +
-                      " " +
-                      (scope.feed_id === f.id ? "active" : "")
-                    }
-                    style={{ paddingLeft: 41 + depth * 14 }}
-                    onClick={() => stream(paneView, { feed_id: f.id })}
-                    {...middleClick(
-                      (paneView === "bookmarks" ? "/bookmarks" : "") +
-                        "/f/" +
-                        f.id,
-                    )}
-                  >
-                    <i className="hue-dot" />
-                    <span onMouseEnter={fullOnHover}>{f.title}</span>
-                    {f.health === "error" && (
-                      <AlertCircle size={14} className="error-color" />
-                    )}
-                    <span className="count" data-unread={f.unread}>
-                      {f.unread || ""}
-                    </span>
-                  </button>
-                ))}
+              {feedLines(f.id, depth)}
             </>
           )}
         </React.Fragment>
       ));
+  const feedLines = (folderId, depth) =>
+    data.feeds
+      .filter((x) => x.folder_id === folderId && shown(x))
+      .map((f) => (
+        <button
+          key={f.id}
+          className={
+            "feed-line " +
+            feedClass(f) +
+            " " +
+            (scope.feed_id === f.id ? "active" : "")
+          }
+          style={{ paddingLeft: 41 + depth * 14 }}
+          onClick={() => stream(paneView, { feed_id: f.id })}
+          {...middleClick(pageUrl(null, paneView, { feed_id: f.id }))}
+        >
+          <i className="hue-dot" />
+          <span onMouseEnter={fullOnHover}>{f.title}</span>
+          {f.health === "error" && (
+            <AlertCircle size={14} className="error-color" />
+          )}
+          <span className="count" data-unread={f.unread}>
+            {f.unread || ""}
+          </span>
+        </button>
+      ));
+  // A page made of one folder lists what is in it, without the folder itself.
+  const pageRoots =
+    paneView === "all" || paneView === "bookmarks"
+      ? []
+      : data.folders.filter((f) => !f.parent_id && f.section === paneView);
+  const paneTree =
+    pageRoots.length === 1 ? (
+      <>
+        {folderTree(pageRoots[0].id, 0)}
+        {feedLines(pageRoots[0].id, -1)}
+      </>
+    ) : (
+      folderTree()
+    );
 
   // The tray works from the library screen too: it leaves the library first.
   const libraryOpen = LIBRARY_TABS.includes(modal);
@@ -1207,6 +1252,22 @@ function App() {
           () => stream("all"),
           onStream("all"),
           data.counts.unread,
+        ],
+        [
+          "videos",
+          MonitorPlay,
+          "Videos",
+          () => stream("videos"),
+          onStream("videos"),
+          data.counts.videos,
+        ],
+        [
+          "podcasts",
+          Podcast,
+          "Podcasts",
+          () => stream("podcasts"),
+          onStream("podcasts"),
+          data.counts.podcasts,
         ],
         [
           "starred",
@@ -1331,11 +1392,17 @@ function App() {
                 </p>
               )
             ) : paneFeeds.length ? (
-              folderTree()
+              paneTree
             ) : paneView === "bookmarks" ? (
               <p className="pane-empty">
                 No bookmarked feeds yet. Bookmark a feed from the button beside
                 its name above the article list.
+              </p>
+            ) : paneView !== "all" ? (
+              <p className="pane-empty">
+                No {paneView} feeds yet. Add one with + and it is offered the{" "}
+                {paneView} folders, or set a top-level folder to show here in
+                Manage library → Folders.
               </p>
             ) : (
               <button
@@ -1607,14 +1674,14 @@ function App() {
                       className="row-feed"
                       onMouseEnter={fullOnHover}
                       onClick={() =>
-                        isPlaylist(item.feed_id)
-                          ? stream("youtube", { feed_id: item.feed_id })
-                          : stream("all", { feed_id: item.feed_id })
+                        stream(feedView(data, item.feed_id), {
+                          feed_id: item.feed_id,
+                        })
                       }
                       {...middleClick(
-                        (isPlaylist(item.feed_id) ? "/youtube" : "") +
-                          "/f/" +
-                          item.feed_id,
+                        pageUrl(null, feedView(data, item.feed_id), {
+                          feed_id: item.feed_id,
+                        }),
                       )}
                     >
                       {item.feed_title}
@@ -1744,14 +1811,14 @@ function App() {
                     ) : (
                       <button
                         onClick={() =>
-                          isPlaylist(a.feed_id)
-                            ? stream("youtube", { feed_id: a.feed_id })
-                            : stream("all", { feed_id: a.feed_id })
+                          stream(feedView(data, a.feed_id), {
+                            feed_id: a.feed_id,
+                          })
                         }
                         {...middleClick(
-                          (isPlaylist(a.feed_id) ? "/youtube" : "") +
-                            "/f/" +
-                            a.feed_id,
+                          pageUrl(null, feedView(data, a.feed_id), {
+                            feed_id: a.feed_id,
+                          }),
                         )}
                       >
                         {a.feed_title}
@@ -2145,6 +2212,16 @@ function Subscribe({ data, act, onClose }) {
     [title, setTitle] = useState(""),
     [selector, setSelector] = useState(""),
     [bridge, setBridge] = useState("");
+  // A video or podcast feed is offered the folders on its page, once it has any.
+  const kind = links.find((l) => l.url === chosen)?.kind || "",
+    page = data.folders.some((f) => f.section === kind) ? kind : "",
+    onPage = data.folders.filter((f) => f.section === page);
+  useEffect(() => {
+    if (!onPage.some((f) => f.id === folder))
+      setFolder(
+        page ? (onPage.find((f) => !f.parent_id) || onPage[0]).id : "inbox",
+      );
+  }, [page]);
   async function find(e) {
     e.preventDefault();
     const result = await submit(() => cmd("discover", { url }));
@@ -2197,13 +2274,22 @@ function Subscribe({ data, act, onClose }) {
           />
         </Field>
         <div className="form-grid">
-          <Field label="Folder">
+          <Field
+            label="Folder"
+            hint={
+              page
+                ? `A ${kind === "videos" ? "video" : "podcast"} feed: these are the folders on the ${kind === "videos" ? "Videos" : "Podcasts"} page.`
+                : kind &&
+                  `A ${kind === "videos" ? "video" : "podcast"} feed. No folder shows on the ${kind === "videos" ? "Videos" : "Podcasts"} page yet; choose one in Manage library → Folders.`
+            }
+          >
             <FolderSelect
               data={data}
               act={act}
               label="Folder"
               value={folder}
               onChange={setFolder}
+              section={page}
             />
           </Field>
           <Field label="Custom title (optional)">
@@ -2237,7 +2323,14 @@ function Subscribe({ data, act, onClose }) {
               >
                 <i className="hue-dot" />
                 <span>
-                  <strong>{link.title}</strong>
+                  <strong>
+                    {link.title}
+                    {link.kind && (
+                      <em className="feed-kind">
+                        {link.kind === "videos" ? "Videos" : "Podcast"}
+                      </em>
+                    )}
+                  </strong>
                   <small>{link.url}</small>
                 </span>
                 {chosen === link.url && <Check size={18} />}

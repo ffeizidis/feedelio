@@ -121,6 +121,9 @@ PLAYLIST = "yt-"
 VIDEO_ID = regex.compile(r"[\w-]{11}")
 PLAYLIST_ID = regex.compile(r"[\w-]{2,64}")
 RECHECK_PER_HOUR = 50
+# Top-level folders can hold videos or podcasts instead of articles: each kind
+# has a page of its own and stays out of All articles.
+SECTIONS = ("videos", "podcasts")
 # How captions are fetched; a video kept by an older way is tried again.
 CAPTIONS = 2
 # How YouTube's player says a video is no longer watchable.
@@ -288,8 +291,43 @@ def parse_feed(url, data, headers):
     """Parse fetched bytes with the retrieval parsers; raises when they are not a feed."""
     parser = JSONFeedParser() if data.lstrip().startswith(b"{") else ExtendedFeedparser()
     feed, entries = parser(url, io.BytesIO(data), headers)
-    list(entries)
-    return feed
+    return feed, list(entries)
+
+
+VIDEO_PAGE = regex.compile(
+    r"https?://(www\.|m\.)?(youtube\.com/(watch|shorts)|youtu\.be/|vimeo\.com/\d|dailymotion\.com/video/)",
+    regex.I,
+)
+AUDIO_FILE = regex.compile(r"\.(mp3|m4a|aac|ogg|opus|wav)(\?|$)", regex.I)
+
+
+def feed_kind(url, entries):
+    """What a feed carries, judged by most of its entries: videos, podcasts, or articles ("")."""
+    if is_youtube(url):
+        return "videos"
+
+    def kind(entry):
+        media = [(e.type or "", e.href or "") for e in entry.enclosures]
+        if any(type.startswith("video/") for type, _ in media) or VIDEO_PAGE.match(entry.link or ""):
+            return "videos"
+        if any(type.startswith("audio/") or AUDIO_FILE.search(href) for type, href in media):
+            return "podcasts"
+        return ""
+
+    kinds = [kind(e) for e in entries[:50]]
+    best = max(SECTIONS, key=kinds.count)
+    return best if kinds and kinds.count(best) * 2 >= len(kinds) else ""
+
+
+def classify_feed(url):
+    """The kind of a feed found on a page, fetched once; unknown is articles."""
+    if is_youtube(url):
+        return "videos"
+    try:
+        data, final, headers = fetch(url)
+        return feed_kind(final, parse_feed(final, data, headers)[1])
+    except Exception:
+        return ""
 
 
 def scraped_date(item):
@@ -416,6 +454,22 @@ class Core:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc):
                         raise
+            # Folders gained pages of their own for videos and podcasts; the
+            # top-level folders already named for them move there.
+            if "kind" not in {r[1] for r in self.db.execute("PRAGMA table_info(folders)")}:
+                try:
+                    self.db.execute("ALTER TABLE folders ADD COLUMN kind TEXT NOT NULL DEFAULT ''")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):
+                        raise
+                else:
+                    for f in self.db.execute(
+                        "SELECT id,name FROM folders WHERE parent_id IS NULL"
+                    ).fetchall():
+                        name = regex.sub(r"[^\p{L}]", "", f[1]).casefold()
+                        kind = {"video": "videos", "podcast": "podcasts"}.get(name.removesuffix("s"))
+                        if kind and f[0] not in ("inbox", YOUTUBE):
+                            self.db.execute("UPDATE folders SET kind=? WHERE id=?", (kind, f[0]))
             # Stable subscription colours, including deleted feeds so restoring or
             # removing subscriptions never shifts the remaining palette.
             self.db.execute("""UPDATE feeds SET options=json_set(options,'$.hue',
@@ -551,7 +605,24 @@ class Core:
         return Core.frame_cache[self.root]
 
     def folders(self):
-        return self.rows("SELECT * FROM folders WHERE id!=? ORDER BY name COLLATE NOCASE", (YOUTUBE,))
+        folders = self.rows("SELECT * FROM folders WHERE id!=? ORDER BY name COLLATE NOCASE", (YOUTUBE,))
+        parents = {f["id"]: f for f in folders}
+        for f in folders:
+            root = f
+            for _ in range(len(folders)):  # The tree is validated; this only bounds the walk.
+                if root["parent_id"] not in parents:
+                    break
+                root = parents[root["parent_id"]]
+            f["section"] = root["kind"]
+        return folders
+
+    def section_folders(self):
+        """Every folder on the videos and podcasts pages, by page."""
+        found = {kind: [] for kind in SECTIONS}
+        for f in self.folders():
+            if f["section"] in found:
+                found[f["section"]].append(f["id"])
+        return found
 
     def descendants(self, folder_id):
         return [
@@ -564,13 +635,15 @@ class Core:
             )
         ]
 
-    def save_folder(self, name, parent_id=None, id=None):
+    def save_folder(self, name, parent_id=None, id=None, section=None):
         if not name.strip():
             raise ValueError("A folder needs a name.")
         if id == "inbox":
             raise ValueError("Unfiled is the permanent default folder.")
         if YOUTUBE in (id, parent_id):
             raise ValueError("The YouTube folder follows your YouTube playlists.")
+        if section not in (None, "", *SECTIONS):
+            raise ValueError("A folder shows on the articles, videos or podcasts page.")
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             if parent_id:
@@ -583,9 +656,17 @@ class Core:
                 (name.strip(), id, parent_id or None),
             ):
                 raise ValueError(f"A folder named {name.strip()} already exists here.")
+            # Only a top-level folder chooses its page; a subfolder shows on its parent's.
             self.db.execute(
-                "INSERT INTO folders VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,parent_id=excluded.parent_id",
-                (id, name.strip(), parent_id),
+                """INSERT INTO folders(id,name,parent_id,kind) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE
+                  SET name=excluded.name,parent_id=excluded.parent_id,kind=CASE WHEN ? THEN excluded.kind ELSE kind END""",
+                (
+                    id,
+                    name.strip(),
+                    parent_id,
+                    "" if parent_id else section or "",
+                    section is not None or bool(parent_id),
+                ),
             )
         return {"id": id}
 
@@ -659,6 +740,12 @@ class Core:
           {ARTICLES} WHERE a.deleted=0 AND f.deleted=0""",
             (READING_LIST, YOUTUBE) * 3,
         )
+        # The videos and podcasts pages count apart from All articles.
+        for kind, ids in self.section_folders().items():
+            on_page = [feed for feed in feeds if feed["folder_id"] in ids]
+            counts[kind] = sum(feed["unread"] for feed in on_page)
+            counts["unread"] -= counts[kind]
+            counts["total"] -= sum(feed["total"] for feed in on_page)
         return dict(
             feeds=feeds,
             playlists=self.feeds(playlists=True),
@@ -701,15 +788,25 @@ class Core:
                     {
                         "url": f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
                         "title": "YouTube channel",
+                        "kind": "videos",
                     }
                 ]
+        # Each feed says what it carries, so it is offered the folders for its page.
         links = from_http_response(final, data, headers)
         if links:
-            return [{"url": link.href, "title": link.title or link.href} for link in links]
+            return [
+                {
+                    "url": link.href,
+                    "title": link.title or link.href,
+                    "kind": classify_feed(link.href) if i < 8 else "",
+                }
+                for i, link in enumerate(links)
+            ]
         # Validate a direct feed with the same parsers as retrieval, without
         # subscribing or fetching it a second time. MIME alone is not evidence.
         try:
-            return [{"url": final, "title": parse_feed(final, data, headers).title or final}]
+            feed, entries = parse_feed(final, data, headers)
+            return [{"url": final, "title": feed.title or final, "kind": feed_kind(final, entries)}]
         except Exception:
             pass
         # Sites that advertise no feed often still serve one at a conventional
@@ -717,12 +814,12 @@ class Core:
         for candidate in feed_guesses(final, data):
             try:
                 body, url, head = fetch(candidate)
-                feed = parse_feed(url, body, head)
+                feed, entries = parse_feed(url, body, head)
             except Exception:
                 continue
             page_title = BeautifulSoup(data, "html.parser").title
             title = feed.title or (page_title.get_text(strip=True) if page_title else "") or url
-            return [{"url": url, "title": title}]
+            return [{"url": url, "title": title, "kind": feed_kind(url, entries)}]
         raise ValueError("No feed found. Try an explicit feed URL or configure a site scraper.")
 
     def subscribe(self, url, folder_id="inbox", title="", options=None):
@@ -900,12 +997,22 @@ class Core:
         elif view == "youtube":
             where.append("f.folder_id=?")
             args.append(YOUTUBE)
+        elif view in SECTIONS:
+            ids = self.section_folders()[view]
+            where.append("f.folder_id IN (" + ",".join("?" for _ in ids) + ")")
+            args.extend(ids)
         elif view in ("all", "bookmarks"):
             where.append("a.feed_id!=?")
             args.append(READING_LIST)
             if not feed_id:
                 where.append("f.folder_id!=?")
                 args.append(YOUTUBE)
+            # Videos and podcasts have pages of their own; a bookmark brings a
+            # feed back wherever it is, as does narrowing to it.
+            if view == "all" and not feed_id and not folder_id:
+                ids = [id for ids in self.section_folders().values() for id in ids]
+                where.append("f.folder_id NOT IN (" + ",".join("?" for _ in ids) + ")")
+                args.extend(ids)
         if tag:
             where.append("EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value=?)")
             args.append(tag)
@@ -2325,7 +2432,8 @@ class Core:
                         target = matches[0]["id"] if matches else uid()
                         if not matches:
                             self.db.execute(
-                                "INSERT INTO folders VALUES (?,?,?)", (target, name.strip(), parent)
+                                "INSERT INTO folders(id,name,parent_id) VALUES (?,?,?)",
+                                (target, name.strip(), parent),
                             )
                 walk(child, target, depth + 1)
 
@@ -2515,7 +2623,7 @@ class Core:
         """
         stamp = now()
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO folders VALUES (?,?,NULL)", (YOUTUBE, "YouTube"))
+            self.db.execute("INSERT OR IGNORE INTO folders(id,name) VALUES (?,?)", (YOUTUBE, "YouTube"))
         synced = new = 0
         for p in playlists:
             if not PLAYLIST_ID.fullmatch(str(p.get("id") or "")):

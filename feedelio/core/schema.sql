@@ -2,9 +2,10 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS folders (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT REFERENCES folders(id),
+ kind TEXT NOT NULL DEFAULT '',
  CHECK (id != parent_id)
 );
-INSERT OR IGNORE INTO folders VALUES ('inbox', 'Unfiled', NULL);
+INSERT OR IGNORE INTO folders(id,name,parent_id) VALUES ('inbox', 'Unfiled', NULL);
 CREATE TABLE IF NOT EXISTS feeds (
  id TEXT PRIMARY KEY, url TEXT UNIQUE NOT NULL, title TEXT NOT NULL, folder_id TEXT NOT NULL REFERENCES folders(id),
  site_url TEXT NOT NULL DEFAULT '', options TEXT NOT NULL DEFAULT '{}', tags TEXT NOT NULL DEFAULT '[]',

@@ -271,7 +271,8 @@ def test_discovery_request_options_and_permanent_migration(lab):
     expect(p.locator(".article-row")).to_have_count(1)
     feed = lab.api("overview")["feeds"][0]
     assert feed["url"] == base + "/destination" and feed["interval"] == 17
-    headers = next(r["headers"] for r in lab.requests if r["path"] == "/old")
+    # Discovery fetched it once to see what it carries; the refresh is the last.
+    headers = [r["headers"] for r in lab.requests if r["path"] == "/old"][-1]
     assert headers["User-Agent"] == "AdversarialUA/1" and headers["Cookie"] == "audit_session=fixture"
 
 

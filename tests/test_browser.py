@@ -999,3 +999,63 @@ def test_saved_youtube_playlists_have_their_own_view_and_keep_lost_videos(core, 
         page.goto(web_server + "/youtube/f/yt-PLbread")
         expect(page.locator(".playlist-line.active")).to_have_text(re.compile("Bread"))
         browser.close()
+
+
+def test_videos_and_podcasts_have_pages_and_new_feeds_are_offered_their_folders(core, site, web_server):
+    """A folder set to show on the Podcasts page leaves All articles for a tray
+    page of its own; a feed found to be a podcast is offered only its folders."""
+    base, routes, _ = site
+    episode = '<item><guid>{0}</guid><title>Episode {0}</title><link>{1}/{0}</link><enclosure url="{1}/{0}.mp3" type="audio/mpeg" length="1"/></item>'
+    routes["/podcast"] = (
+        200,
+        {"Content-Type": "application/rss+xml"},
+        f"<rss version='2.0'><channel><title>Talk show</title><link>{base}</link>{episode.format('e1', base)}</channel></rss>",
+    )
+    shows = core.save_folder("Shows", section="podcasts")["id"]
+    core.save_folder("Interviews", parent_id=shows)
+    core.save_folder("Essays")
+    show = core.subscribe(base + "/podcast?old", shows, "Old show")["id"]
+    journal = core.subscribe(base + "/rss", "inbox", "Journal")["id"]
+    core.ingest(show, "o1", "An old episode", base + "/o1", "<p>Talk.</p>")
+    core.ingest(journal, "j1", "A journal story", base + "/j1", "<p>Body.</p>")
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        page.goto(web_server)
+        expect(page.locator(".article-row")).to_have_text([re.compile("A journal story")])
+        pane = page.locator(".sidebar")
+        expect(pane.locator(".folder-line", has_text="Shows")).to_have_count(0)
+
+        tray = page.get_by_role("navigation", name="Streams")
+        tray.get_by_role("button", name="Podcasts", exact=True).click()
+        expect(page).to_have_url(web_server + "/podcasts")
+        expect(page.locator(".list-heading h1")).to_have_text("Podcasts")
+        # One folder makes the page: its subfolders and feeds are listed directly.
+        expect(pane.locator(".folder-line")).to_have_text([re.compile("Interviews")])
+        expect(pane.locator(".feed-line")).to_have_text([re.compile("Old show\\s*1")])
+        expect(page.locator(".article-row")).to_have_text([re.compile("An old episode")])
+        pane.locator(".feed-line", has_text="Old show").click()
+        expect(page).to_have_url(web_server + "/podcasts/f/" + show)
+        page.reload()
+        expect(pane.locator(".feed-line.active")).to_have_text(re.compile("Old show"))
+        tray.get_by_role("button", name="Videos", exact=True).click()
+        expect(pane).to_contain_text("No videos feeds yet")
+
+        tray.get_by_role("button", name="Add a subscription").click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("Website or feed URL").fill(base + "/podcast")
+        dialog.get_by_role("button", name="Find feeds").click()
+        expect(dialog.locator(".discovered")).to_contain_text("Podcast")
+        expect(dialog.get_by_role("combobox", name="Folder")).to_contain_text("Shows")
+        expect(dialog).to_contain_text("these are the folders on the Podcasts page")
+        dialog.get_by_role("combobox", name="Folder").click()
+        expect(dialog.get_by_role("listbox", name="Folder").get_by_role("option")).to_have_text(
+            ["Shows", "Interviews", "+ New folder…"]
+        )
+        dialog.get_by_role("listbox", name="Folder").get_by_role("option", name="Interviews").click()
+        dialog.get_by_role("button", name="Subscribe", exact=True).click()
+        expect(dialog).to_have_count(0)
+        added = next(f for f in core.feeds() if f["url"] == base + "/podcast")
+        assert added["folder_id"] != shows and added["folder_id"] != "inbox"
+        browser.close()

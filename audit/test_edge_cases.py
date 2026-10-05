@@ -163,7 +163,7 @@ def test_invalid_restore_rolls_back_and_allows_retry(lab):
     )
     expect(p.locator(".manager-body .inline-error")).to_contain_text("folder tree")
     assert lab.api("overview")["folders"] == [
-        {"id": "inbox", "name": "Unfiled", "parent_id": None, "unread": 0}
+        {"id": "inbox", "name": "Unfiled", "parent_id": None, "kind": "", "section": "", "unread": 0}
     ]
     assert not upload.is_disabled()
 

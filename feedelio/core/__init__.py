@@ -777,17 +777,24 @@ class Core:
 
     def discover(self, url):
         url = safe_url(url)
-        data, final, headers = fetch(url)
+        # In the EU YouTube answers a feed reader with its consent page; the
+        # SOCS cookie declines it, as for watch pages.
+        data, final, headers = fetch(url, {"cookie": "SOCS=CAI"} if is_youtube(url) else None)
         if is_youtube(final):
             soup = BeautifulSoup(data, "html.parser")
             channel = soup.select_one('meta[itemprop="channelId"]')
-            match = regex.search(r'"channelId"\s*:\s*"(UC[\w-]+)"', data.decode(errors="replace"))
+            # A video page names its channel; a channel page (/@name) names itself.
+            match = regex.search(
+                r'"(?:channelId|externalId)"\s*:\s*"(UC[\w-]+)"', data.decode(errors="replace")
+            )
             channel_id = channel.get("content") if channel else match[1] if match else None
+            name = soup.select_one('meta[property="og:title"]')
             if channel_id:
                 return [
                     {
                         "url": f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
-                        "title": "YouTube channel",
+                        "title": (name.get("content") if name and not VIDEO_PAGE.match(final) else "")
+                        or "YouTube channel",
                         "kind": "videos",
                     }
                 ]

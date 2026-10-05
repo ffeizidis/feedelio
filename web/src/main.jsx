@@ -1270,20 +1270,6 @@ function App() {
           data.counts.podcasts,
         ],
         [
-          "starred",
-          Star,
-          "Saved",
-          () => stream("starred"),
-          onStream("starred"),
-        ],
-        [
-          "bookmarks",
-          Bookmark,
-          "Bookmarked feeds",
-          () => stream("bookmarks"),
-          onStream("bookmarks"),
-        ],
-        [
           "reading",
           BookOpen,
           "Reading list",
@@ -1298,6 +1284,20 @@ function App() {
           () => stream("youtube"),
           onStream("youtube"),
           data.counts.youtube,
+        ],
+        [
+          "starred",
+          Star,
+          "Saved",
+          () => stream("starred"),
+          onStream("starred"),
+        ],
+        [
+          "bookmarks",
+          Bookmark,
+          "Bookmarked feeds",
+          () => stream("bookmarks"),
+          onStream("bookmarks"),
         ],
         [
           "history",

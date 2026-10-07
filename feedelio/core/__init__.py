@@ -103,10 +103,14 @@ DEFAULTS = dict(
     extract_articles=True,
     collapsed_folders=[],
     youtube_checked="",
+    maintained="",
 )
 JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result", "meta"}
 # Articles are always read through their feed, so deleted feeds hide their articles.
 ARTICLES = "FROM articles a JOIN feeds f ON f.id=a.feed_id"
+# What maintain() keeps a weekly copy of: the library, not what it has read.
+LIBRARY_TABLES = ("feeds", "folders", "rules", "settings")
+BACKUPS_KEPT = 8
 # An enclosure without a type is still audio when its file says so.
 AUDIO_LINK = " OR ".join(
     f"lower(json_extract(e.value,'$.href')) LIKE '%.{ext}%'"
@@ -434,6 +438,8 @@ class Core:
             (self.root / "downloads").mkdir(exist_ok=True)
             (self.root / "thumbs").mkdir(exist_ok=True)
             self.db = sqlite3.connect(self.root / "app.sqlite", timeout=30)
+            # A new database gives back the room deleted rows leave; see maintain().
+            self.db.execute("PRAGMA auto_vacuum=INCREMENTAL")
             self.db.executescript(Path(__file__).with_name("schema.sql").read_text())
             columns = {r[1] for r in self.db.execute("PRAGMA table_info(articles)")}
             for name, definition in (
@@ -1496,7 +1502,7 @@ class Core:
         )
 
     def enqueue(self, kind, payload=None):
-        if kind not in ("refresh", "extract", "download", "backfill", "purge", "rules", "video"):
+        if kind not in ("refresh", "extract", "download", "backfill", "purge", "rules", "video", "maintain"):
             raise ValueError("Unknown job type.")
         payload = payload or {}
         with self.db:
@@ -2086,6 +2092,30 @@ class Core:
             )
         return {"purged": count}
 
+    def maintain(self):
+        """Weekly: keep a copy of the feed list, then hand the disk back the room
+        deleted rows left in the database."""
+        folder = self.root / "backups"
+        folder.mkdir(exist_ok=True)
+        day = now()[:10]
+        (folder / f"feeds-{day}.opml").write_text(self.export_opml())
+        library = {t: [dict(r) for r in self.db.execute(f"SELECT * FROM {t}")] for t in LIBRARY_TABLES}
+        (folder / f"library-{day}.json").write_text(
+            json.dumps({"created": now(), "tables": library}, ensure_ascii=False, indent=1)
+        )
+        for pattern in ("feeds-*.opml", "library-*.json"):
+            for old in sorted(folder.glob(pattern))[:-BACKUPS_KEPT]:
+                old.unlink()
+        before = self.root.joinpath("app.sqlite").stat().st_size
+        if self.db.execute("PRAGMA auto_vacuum").fetchone()[0] != 2:
+            # A database made before incremental vacuuming is rewritten once to allow it.
+            self.db.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            self.db.execute("VACUUM")
+        else:
+            self.db.execute("PRAGMA incremental_vacuum").fetchall()
+        self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return {"freed": before - self.root.joinpath("app.sqlite").stat().st_size}
+
     def _purge_feed(self, reader, feed_id):
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
@@ -2213,6 +2243,10 @@ class Core:
                     (YOUTUBE, CAPTIONS),
                 ):
                     self._enqueue("video", {"video_id": v["video_id"]})
+        if self.settings()["maintained"] < now(days=-7):
+            with self.db:
+                self._setting("maintained", now())
+            self.enqueue("maintain")
         # Saved videos are looked at again weekly, so one YouTube takes down is
         # marked even while it stays in its playlist; a few each hour.
         if self.settings()["youtube_checked"] < now(hours=-1):
@@ -2253,6 +2287,8 @@ class Core:
                 result = self.reapply_rules(job_id=job["id"])
             elif job["kind"] == "video":
                 result = self.preserve_video(**p)
+            elif job["kind"] == "maintain":
+                result = self.maintain()
             else:
                 result = self.purge()
             with self.db:

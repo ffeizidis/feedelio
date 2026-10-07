@@ -498,6 +498,36 @@ def test_finished_feed_checks_are_cleared_after_a_day(core, site):
     assert {extract, recent} <= left  # Other kinds, and the last day's checks, stay.
 
 
+def test_weekly_maintenance_keeps_the_feed_list_and_gives_back_free_space(core, site, tmp_path):
+    feed = core.subscribe(site[0] + "/rss", title="Journal")["id"]
+    for n in range(300):
+        core.ingest(feed, f"g{n}", f"Story {n}", site[0] + f"/{n}", "<p>" + "words " * 2000 + "</p>")
+    with core.db:
+        core.db.execute("DELETE FROM articles")
+    database = core.root / "app.sqlite"
+    core.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    full = database.stat().st_size
+    while core.tick(refreshes=False):
+        pass
+    job = core.rows("SELECT status,result FROM jobs WHERE kind='maintain'")
+    assert job == [{"status": "done", "result": {"freed": job[0]["result"]["freed"]}}]
+    assert database.stat().st_size < full / 2
+    backups = sorted(p.name for p in (core.root / "backups").iterdir())
+    assert backups == [f"feeds-{now()[:10]}.opml", f"library-{now()[:10]}.json"]
+    library = json.loads((core.root / "backups" / backups[1]).read_text())
+    assert [f["title"] for f in library["tables"]["feeds"]] == ["Journal"]
+    assert "articles" not in library["tables"]
+    assert "Journal" in (core.root / "backups" / backups[0]).read_text()
+    core.schedule()  # Not again within the week.
+    assert len(core.rows("SELECT id FROM jobs WHERE kind='maintain'")) == 1
+    # A database made before maintenance existed is switched over once.
+    core.db.execute("PRAGMA auto_vacuum=NONE")
+    core.db.execute("VACUUM")
+    assert core.db.execute("PRAGMA auto_vacuum").fetchone()[0] == 0
+    core.maintain()
+    assert core.db.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+
+
 def test_refresh_jobs_run_before_an_older_extraction_backlog(core, site):
     id = subscription(core, site)
     core.db.execute("UPDATE jobs SET status='done'")  # Clear the subscription's own jobs.

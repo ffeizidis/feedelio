@@ -151,7 +151,8 @@ def test_an_older_database_gains_the_column_and_keeps_its_rules(tmp_path, monkey
         pathlib.Path("feedelio/core/schema.sql")
         .read_text()
         .replace(
-            " enabled INTEGER NOT NULL DEFAULT 1,\n is_regex INTEGER NOT NULL DEFAULT 1);",
+            " enabled INTEGER NOT NULL DEFAULT 1,\n is_regex INTEGER NOT NULL DEFAULT 1, negate INTEGER NOT NULL"
+            " DEFAULT 0,\n feed_negate INTEGER NOT NULL DEFAULT 0, conditions TEXT NOT NULL DEFAULT '[]');",
             " enabled INTEGER NOT NULL DEFAULT 1);",
         )
     )
@@ -166,8 +167,14 @@ def test_an_older_database_gains_the_column_and_keeps_its_rules(tmp_path, monkey
 
     Core.initialised.discard(tmp_path.resolve())  # The guard is class-level.
     with Core(tmp_path) as core:
-        assert "is_regex" in {r[1] for r in core.db.execute("PRAGMA table_info(rules)")}
-        assert core.rules()[0]["is_regex"] == 1  # What it always was.
+        assert {"is_regex", "negate", "feed_negate", "conditions"} <= {
+            r[1] for r in core.db.execute("PRAGMA table_info(rules)")
+        }
+        rule = core.rules()[0]
+        assert rule["is_regex"] == 1  # What it always was.
+        assert (rule["negate"], rule["feed_negate"], rule["conditions"]) == (0, 0, [])
+        site = core.subscribe("https://example.org/feed")["id"]
+        assert core.article(core.ingest(site, "x", "An advert", "https://example.org/x"))["read"] == 1
 
 
 def test_a_backup_without_the_column_still_restores(core, site, tmp_path, monkeypatch):
@@ -266,3 +273,63 @@ def test_a_rule_that_matches_but_changes_nothing_says_so(core, site):
     # A pattern that genuinely matches nothing is a different answer entirely.
     missed = core.preview_rules({**draft, "pattern": "^ advert "})
     assert missed["changed"] == 0 and missed["matched"] == 0
+
+
+def test_every_condition_must_hold_and_any_can_be_negated(core, site):
+    core.save_rule(
+        "Short news",
+        "title",
+        "news",
+        "read",
+        conditions=[
+            {"field": "body", "pattern": "brief", "is_regex": False},
+            {"field": "url", "pattern": "/a0$", "negate": True},
+        ],
+    )
+    _, ids = library(
+        core,
+        site,
+        ["news one", "news two", "news three", "sport four"],
+        body="<p>A brief body.</p>",
+    )
+    # The first is excluded by its address, the last by its title.
+    assert [core.article(id)["read"] for id in ids] == [0, 1, 1, 0]
+    rule = core.rules()[0]
+    assert rule["conditions"][1] == {"field": "url", "pattern": "/a0$", "is_regex": True, "negate": True}
+
+
+def test_a_negated_pattern_acts_on_what_does_not_match(core, site):
+    core.save_rule("Not mine", "author", "Alice\nBob", "read", negate=True)
+    core.save_rule("Untagged", "tags", "keep", "star", negate=True)
+    _, ids = library(core, site, ["one"])
+    a = core.article(ids[0])
+    assert a["read"] == 1 and a["starred"] == 1
+    with pytest.raises(ValueError, match="cannot run on what does not"):
+        core.save_rule("Odd", "body", "x", "rewrite", value="y", negate=True)
+
+
+def test_a_rule_can_cover_every_feed_but_one(core, site):
+    mine, ids = library(core, site, ["an advert"])
+    theirs = core.subscribe(site[0] + "/other")["id"]
+    elsewhere = core.ingest(theirs, "x", "an advert elsewhere", site[0] + "/x", "<p>Body.</p>")
+    draft = {"name": "Ads", "field": "title", "pattern": "advert", "action": "read", "feed_id": mine}
+    assert core.preview_rules({**draft, "feed_negate": True})["changed"] == 1
+    core.save_rule(**draft, feed_negate=True)
+    core.reapply_rules()
+    assert core.article(ids[0])["read"] == 0 and core.article(elsewhere)["read"] == 1
+    # "Except" means nothing without a feed to except.
+    core.save_rule("Everywhere", "title", "x", "read", feed_negate=True)
+    assert [r["feed_negate"] for r in core.rules()] == [1, 0]
+
+
+def test_a_broken_condition_is_named_when_saving_or_previewing(core, site):
+    bad = {"name": "Bad", "field": "title", "pattern": "ok", "action": "read"}
+    with pytest.raises(ValueError, match="Condition 2: Line 1"):
+        core.save_rule(
+            **bad, conditions=[{"field": "body", "pattern": "fine"}, {"field": "url", "pattern": "["}]
+        )
+    with pytest.raises(ValueError, match="Condition 1: invalid field"):
+        core.preview_rules({**bad, "conditions": [{"field": "nope", "pattern": "x"}]})
+    with pytest.raises(ValueError, match="Condition 1: A rule needs"):
+        core.save_rule(**bad, conditions=[{"field": "body", "pattern": " "}])
+    assert core.rules() == []

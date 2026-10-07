@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS rules (id TEXT PRIMARY KEY, name TEXT NOT NULL, field
 CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'queued', created TEXT NOT NULL, updated TEXT NOT NULL, error TEXT, result TEXT);
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status,created);
+CREATE INDEX IF NOT EXISTS jobs_kind ON jobs(kind,created);
+CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created);
 CREATE TABLE IF NOT EXISTS undo (id TEXT PRIMARY KEY, label TEXT NOT NULL, snapshot TEXT NOT NULL, created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, article_id TEXT NOT NULL, feed_id TEXT NOT NULL,
  kind TEXT NOT NULL, created TEXT NOT NULL);

@@ -1059,3 +1059,33 @@ def test_videos_and_podcasts_have_pages_and_new_feeds_are_offered_their_folders(
         added = next(f for f in core.feeds() if f["url"] == base + "/podcast")
         assert added["folder_id"] != shows and added["folder_id"] != "inbox"
         browser.close()
+
+
+def test_the_read_dot_turns_on_the_click_and_back_when_the_server_refuses(core, site, web_server):
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss", "inbox", "Journal")["id"]
+    core.ingest(feed, "j1", "A journal story", base + "/j1", "<p>Body.</p>")
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        held = []
+        page.route("**/api/actions/change_articles", lambda route: held.append(route))
+        page.goto(web_server)
+        dot = page.get_by_role("button", name="Mark read: A journal story")
+        dot.click()
+        # Read before the server has answered.
+        unread = page.get_by_role("button", name="Mark unread: A journal story")
+        expect(unread.locator(".read-circle.is-read")).to_be_visible()
+        with page.expect_response("**/api/actions/change_articles"):
+            held.pop().continue_()
+        assert core.articles(view="all")["items"][0]["read"]
+        page.unroute("**/api/actions/change_articles")
+        page.route(
+            "**/api/actions/change_articles",
+            lambda route: route.fulfill(status=500, json={"detail": "Database is busy."}),
+        )
+        unread.click()
+        expect(page.get_by_text("Database is busy.")).to_be_visible()
+        expect(unread.locator(".read-circle.is-read")).to_be_visible()
+        assert core.articles(view="all")["items"][0]["read"]
+        browser.close()

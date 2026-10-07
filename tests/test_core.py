@@ -482,6 +482,22 @@ def test_worker_health_failures_and_unique_jobs(core, site):
     assert core.overview()["jobs"][0]["status"] in ("failed", "queued")
 
 
+def test_finished_feed_checks_are_cleared_after_a_day(core, site):
+    id = core.subscribe(site[0] + "/rss")["id"]
+    core.refresh(id)
+    old = core.enqueue("refresh", {"feed_id": id})["id"]
+    core.tick()
+    extract = core.enqueue("extract", {"article_id": "x"})["id"]
+    with core.db:
+        core.db.execute("UPDATE jobs SET status='done',updated=?", (now(days=-2),))
+    recent = core.enqueue("refresh", {"feed_id": id})["id"]
+    core.tick()
+    core.schedule()
+    left = {j["id"] for j in core.rows("SELECT id FROM jobs")}
+    assert old not in left
+    assert {extract, recent} <= left  # Other kinds, and the last day's checks, stay.
+
+
 def test_refresh_jobs_run_before_an_older_extraction_backlog(core, site):
     id = subscription(core, site)
     core.db.execute("UPDATE jobs SET status='done'")  # Clear the subscription's own jobs.

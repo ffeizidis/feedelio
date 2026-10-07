@@ -2175,6 +2175,12 @@ class Core:
         """Queue the refreshes that are due, the nightly purge and archive seeding."""
         with self.db:
             self._setting("worker_heartbeat", now())
+            # Every feed is checked many times a day; a finished check older than
+            # the queue's one-day tally says nothing the feed row does not.
+            self.db.execute(
+                "DELETE FROM jobs WHERE kind='refresh' AND status IN ('done','failed') AND updated<?",
+                (now(days=-1),),
+            )
         for f in self.rows(
             "SELECT id FROM feeds WHERE deleted=0 AND url LIKE 'http%' AND (next_check IS NULL OR next_check<=?)",
             (now(),),

@@ -750,8 +750,22 @@ function App() {
         )
       : cache.invalidateQueries();
   const notify = (message, error = false) => setToast({ message, error });
+  // The read dot and the star change on the click, ahead of the server's answer.
+  function patchArticles({ ids, read, starred }) {
+    const changes = Object.fromEntries(
+      Object.entries({ read, starred }).filter(([, v]) => v !== undefined),
+    );
+    if (!Object.keys(changes).length) return;
+    const patch = (item) =>
+      item && ids.includes(item.id) ? { ...item, ...changes } : item;
+    cache.setQueriesData({ queryKey: ["articles"] }, (page) =>
+      page?.items ? { ...page, items: page.items.map(patch) } : page,
+    );
+    cache.setQueriesData({ queryKey: ["article"] }, patch);
+  }
   async function act(name, payload, message, options = {}) {
     setBusy((n) => n + 1);
+    if (name === "change_articles") patchArticles(payload);
     try {
       const result = await cmd(name, payload);
       if (
@@ -765,6 +779,7 @@ function App() {
       if (message) notify(message);
       return result;
     } catch (error) {
+      if (name === "change_articles") refresh();
       notify(error.message, true);
       throw error;
     } finally {

@@ -398,6 +398,54 @@ def test_rules_are_edited_previewed_and_applied(core, site, web_server):
         browser.close()
 
 
+def test_a_rule_chains_conditions_and_negates_them(core, site, web_server):
+    """Every condition must hold, any of them can be "does not match", and the
+    scope can be every feed but one."""
+    base, routes, _ = site
+    routes["/two"] = routes["/rss"]
+    journal = core.subscribe(base + "/rss", "inbox", "The Sunday Journal")["id"]
+    weekly = core.subscribe(base + "/two", "inbox", "The Weekly")["id"]
+    for i, (feed, title, body) in enumerate(
+        [
+            (journal, "News today", "<p>A brief note.</p>"),
+            (weekly, "News today", "<p>A brief note.</p>"),
+            (weekly, "News at length", "<p>A long essay.</p>"),
+            (weekly, "Gardening", "<p>A brief note.</p>"),
+        ]
+    ):
+        core.ingest(feed, str(i), title, f"{base}/a{i}", body)
+
+    with sync_playwright() as play:
+        browser = play.chromium.launch()
+        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        page.goto(web_server)
+        page.get_by_role("button", name="Manage library").click()
+        page.get_by_role("button", name="Rules", exact=True).click()
+        page.get_by_role("button", name="+ Add new rule", exact=True).click()
+        form = page.locator(".rule-form")
+        form.locator("input[name=name]").fill("Brief news elsewhere")
+        form.locator("textarea[name=pattern]").fill("news")
+        form.get_by_role("button", name="+ And another condition", exact=True).click()
+        pick(page, "Condition 1 field", "body")
+        pick(page, "Condition 1 test", "does not match")
+        # An empty condition cannot be saved.
+        expect(form.get_by_role("button", name="Add rule", exact=True)).to_be_disabled()
+        form.get_by_label("Condition 1 patterns").fill("essay")
+        pick(page, "Scope", "The Sunday Journal")
+        pick(page, "Feeds", "Every feed except")
+        form.get_by_role("button", name="Preview this rule", exact=True).click()
+        expect(form.locator(".rule-preview")).to_contain_text("1 of 4 stored articles")
+        form.get_by_role("button", name="Add rule", exact=True).click()
+        expect(page.locator(".rule-row")).to_contain_text(
+            "title matches news and body doesn't match essay and feed isn't The Sunday Journal"
+        )
+        # Reopened, it is the same rule.
+        page.get_by_role("button", name="Edit Brief news elsewhere", exact=True).click()
+        expect(page.get_by_label("Condition 1 patterns")).to_have_value("essay")
+        expect(page.get_by_role("combobox", name="Feeds")).to_contain_text("Every feed except")
+        browser.close()
+
+
 def test_a_long_dropdown_is_narrowed_by_typing(core, site, web_server):
     """A rule's scope among many feeds: type to search, rather than hunt."""
     base, routes, _ = site

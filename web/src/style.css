@@ -2580,6 +2580,32 @@ dialog::backdrop {
 .rule-form .switch-control {
   margin-bottom: var(--space-5);
 }
+/* Field, test and action side by side while there is room. */
+.rule-form .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+}
+.rule-condition {
+  margin: 0 0 var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+}
+.rule-condition legend {
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.rule-condition .form-grid {
+  grid-template-columns: 1fr 1fr auto;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.rule-condition textarea {
+  width: 100%;
+}
+.rule-condition-add {
+  margin-bottom: var(--space-5);
+}
 .rule-line-error,
 .rule-line-warning {
   margin: calc(-1 * var(--space-3)) 0 var(--space-4);

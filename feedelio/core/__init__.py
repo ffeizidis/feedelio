@@ -105,7 +105,7 @@ DEFAULTS = dict(
     youtube_checked="",
     maintained="",
 )
-JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result", "meta"}
+JSON_FIELDS = {"options", "tags", "enclosures", "payload", "result", "meta", "conditions"}
 # Articles are always read through their feed, so deleted feeds hide their articles.
 ARTICLES = "FROM articles a JOIN feeds f ON f.id=a.feed_id"
 # What maintain() keeps a weekly copy of: the library, not what it has read.
@@ -281,6 +281,39 @@ def compile_rule(pattern, is_regex=True):
     return compiled
 
 
+def compile_whole(rule):
+    """A rule's own pattern and every further condition, compiled, in the shape
+    the matcher runs: (rule, its patterns, [(field, patterns, negate), ...])."""
+    if rule["field"] not in RULE_FIELDS or rule["action"] not in RULE_ACTIONS:
+        raise ValueError("Invalid rule field or action.")
+    if rule["action"] == "rewrite" and rule.get("negate"):
+        raise ValueError("A rewrite needs text that matches; it cannot run on what does not.")
+    patterns = compile_rule(rule["pattern"], rule.get("is_regex", 1))
+    extra = []
+    for number, c in enumerate(rule.get("conditions") or [], 1):
+        if not isinstance(c, dict) or c.get("field") not in RULE_FIELDS:
+            raise ValueError(f"Condition {number}: invalid field.")
+        try:
+            compiled = compile_rule(c.get("pattern"), c.get("is_regex", True))
+        except ValueError as error:
+            raise ValueError(f"Condition {number}: {error}") from error
+        extra.append((c["field"], compiled, bool(c.get("negate"))))
+    return rule, patterns, extra
+
+
+def clean_conditions(conditions):
+    """Only what a condition is made of, so a stored rule carries nothing else."""
+    return [
+        {
+            "field": c.get("field"),
+            "pattern": c.get("pattern") or "",
+            "is_regex": bool(c.get("is_regex", True)),
+            "negate": bool(c.get("negate")),
+        }
+        for c in conditions or []
+    ]
+
+
 def replacement_error(compiled, value):
     """Report a rewrite template referring to a group its pattern cannot capture."""
     for number, name in regex.findall(r"\\(\d+)|\\g<([^>]*)>", value or ""):
@@ -453,10 +486,19 @@ class Core:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc):
                         raise
-            # Rules predating the literal/regex choice were regular expressions.
-            if "is_regex" not in {r[1] for r in self.db.execute("PRAGMA table_info(rules)")}:
+            # Rules predating the literal/regex choice were regular expressions;
+            # rules predating conditions and "is not" had one positive test.
+            have = {r[1] for r in self.db.execute("PRAGMA table_info(rules)")}
+            for name, definition in (
+                ("is_regex", "INTEGER NOT NULL DEFAULT 1"),
+                ("negate", "INTEGER NOT NULL DEFAULT 0"),
+                ("feed_negate", "INTEGER NOT NULL DEFAULT 0"),
+                ("conditions", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                if name in have:
+                    continue
                 try:
-                    self.db.execute("ALTER TABLE rules ADD COLUMN is_regex INTEGER NOT NULL DEFAULT 1")
+                    self.db.execute(f"ALTER TABLE rules ADD COLUMN {name} {definition}")
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc):
                         raise
@@ -1231,11 +1273,31 @@ class Core:
         return self.rows("SELECT * FROM rules ORDER BY rowid")
 
     def save_rule(
-        self, name, field, pattern, action, value="", feed_id=None, enabled=True, id=None, is_regex=True
+        self,
+        name,
+        field,
+        pattern,
+        action,
+        value="",
+        feed_id=None,
+        enabled=True,
+        id=None,
+        is_regex=True,
+        negate=False,
+        feed_negate=False,
+        conditions=(),
     ):
-        if field not in RULE_FIELDS or action not in RULE_ACTIONS:
-            raise ValueError("Invalid rule field or action.")
-        compiled = compile_rule(pattern, is_regex)
+        conditions = clean_conditions(conditions)
+        _, compiled, _ = compile_whole(
+            dict(
+                field=field,
+                action=action,
+                pattern=pattern,
+                is_regex=is_regex,
+                negate=negate,
+                conditions=conditions,
+            )
+        )
         if action == "rewrite":
             problem = replacement_error(compiled[0], value)
             if problem:
@@ -1249,12 +1311,27 @@ class Core:
             # Named columns, so adding one later cannot shift a positional insert.
             # The upsert keeps the rowid, and with it the rule's place in the order.
             self.db.execute(
-                """INSERT INTO rules (id,name,field,pattern,action,value,feed_id,enabled,is_regex)
-                VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+                """INSERT INTO rules
+                (id,name,field,pattern,action,value,feed_id,enabled,is_regex,negate,feed_negate,conditions)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,field=excluded.field,pattern=excluded.pattern,action=excluded.action,
                 value=excluded.value,feed_id=excluded.feed_id,enabled=excluded.enabled,
-                is_regex=excluded.is_regex""",
-                (id, name, field, pattern, action, value, feed_id, int(enabled), int(is_regex)),
+                is_regex=excluded.is_regex,negate=excluded.negate,feed_negate=excluded.feed_negate,
+                conditions=excluded.conditions""",
+                (
+                    id,
+                    name,
+                    field,
+                    pattern,
+                    action,
+                    value,
+                    feed_id,
+                    int(enabled),
+                    int(is_regex),
+                    int(bool(negate)),
+                    int(bool(feed_negate and feed_id)),
+                    json.dumps(conditions),
+                ),
             )
         return {"id": id}
 
@@ -1296,7 +1373,7 @@ class Core:
             if not rule["enabled"]:
                 continue
             try:
-                ready.append((rule, compile_rule(rule["pattern"], rule.get("is_regex", 1))))
+                ready.append(compile_whole(rule))
             except ValueError:
                 continue
         return ready
@@ -1314,12 +1391,17 @@ class Core:
         whose pattern hit at all, and any that ran out of time on this article.
         """
         changed, fired, matched, slow = set(), [], [], []
-        for rule, patterns in matchers:
-            if rule["feed_id"] not in (None, a["feed_id"]):
+        for rule, patterns, extra in matchers:
+            # Scoped to one feed, or to every feed but that one.
+            if rule["feed_id"] and (rule["feed_id"] == a["feed_id"]) == bool(rule.get("feed_negate")):
                 continue
-            source = str(a.get(rule["field"], ""))
+            tests = [(rule["field"], patterns, bool(rule.get("negate"))), *extra]
             try:
-                if not any(p.search(source, timeout=RULE_TIMEOUT) for p in patterns):
+                # Every condition must hold; a negated one holds when no line matches.
+                if not all(
+                    any(p.search(str(a.get(field, "")), timeout=RULE_TIMEOUT) for p in ps) != negate
+                    for field, ps, negate in tests
+                ):
                     continue
                 if rule["action"] == "rewrite":
                     body = a["body"]
@@ -2336,9 +2418,9 @@ class Core:
         from what applying actually does.
         """
         totals = dict.fromkeys(RULE_ACTIONS, 0)
-        per_rule = {rule["id"]: 0 for rule, _ in matchers}
-        per_rule_matched = {rule["id"]: 0 for rule, _ in matchers}
-        rules_by_id = {rule["id"]: rule for rule, _ in matchers}
+        per_rule = {rule["id"]: 0 for rule, *_ in matchers}
+        per_rule_matched = {rule["id"]: 0 for rule, *_ in matchers}
+        rules_by_id = {rule["id"]: rule for rule, *_ in matchers}
         scanned = changed_articles = matched_articles = timeouts = 0
         slow = set()
         # Deleted articles stay out of reach, as they already are for ingest.
@@ -2432,15 +2514,16 @@ class Core:
             # Asking what a disabled rule would do is the point of asking.
             "enabled": 1,
             "is_regex": int(bool(rule.get("is_regex", True))),
+            "negate": int(bool(rule.get("negate"))),
+            "feed_negate": int(bool(rule.get("feed_negate"))),
+            "conditions": clean_conditions(rule.get("conditions")),
         }
-        if draft["field"] not in RULE_FIELDS or draft["action"] not in RULE_ACTIONS:
-            raise ValueError("Invalid rule field or action.")
-        compiled = compile_rule(draft["pattern"], draft["is_regex"])
+        whole = compile_whole(draft)
         if draft["action"] == "rewrite":
-            problem = replacement_error(compiled[0], draft["value"])
+            problem = replacement_error(whole[1][0], draft["value"])
             if problem:
                 raise ValueError(problem)
-        return self.scan_rules([(draft, compiled)], write=False)
+        return self.scan_rules([whole], write=False)
 
     def import_opml(self, xml):
         root = fromstring(xml)

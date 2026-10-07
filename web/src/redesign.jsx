@@ -938,7 +938,36 @@ const BLANK = {
   value: "",
   feed_id: "",
   is_regex: true,
+  negate: false,
+  feed_negate: false,
+  conditions: [],
 };
+// Whether a test holds when its pattern matches, or when it does not.
+const MATCHES = [
+  { value: "is", label: "matches" },
+  { value: "not", label: "does not match" },
+];
+const asOp = (negate) => (negate ? "not" : "is");
+
+// One line per rule in the list: every test it makes, and what it does.
+function describeRule(r, feeds) {
+  const test = (field, pattern, negate, regex) =>
+    `${field} ${negate ? "doesn't " : ""}${
+      regex ? (negate ? "match" : "matches") : negate ? "contain" : "contains"
+    } ${(pattern || "").split("\n").filter(Boolean).join(" · ")}`;
+  const tests = [
+    test(r.field, r.pattern, r.negate, r.is_regex),
+    ...(r.conditions || []).map((c) =>
+      test(c.field, c.pattern, c.negate, c.is_regex),
+    ),
+  ];
+  const feed = r.feed_id && feeds.find((f) => f.id === r.feed_id);
+  if (r.feed_id)
+    tests.push(
+      `${r.feed_negate ? "feed isn't" : "feed is"} ${feed?.title || "a removed feed"}`,
+    );
+  return `${tests.join(" and ")} → ${r.action} ${r.value || ""}`;
+}
 
 const REGEX_SYNTAX = [
   [".", "any character"],
@@ -1015,6 +1044,22 @@ export function RuleSheet({
     [triedError, setTriedError] = useState(""),
     request = useRef(0);
   const set = (key) => (v) => setForm((f) => ({ ...f, [key]: v }));
+  const setCondition = (i, change) =>
+    setForm((f) => ({
+      ...f,
+      conditions: f.conditions.map((c, j) =>
+        j === i ? { ...c, ...change } : c,
+      ),
+    }));
+  // What is sent: conditions follow the rule's own regex switch.
+  const payload = () => ({
+    ...form,
+    feed_id: form.feed_id || null,
+    conditions: form.conditions.map((c) => ({
+      ...c,
+      is_regex: !!form.is_regex,
+    })),
+  });
   // Checked by the same engine that runs the rules, so this cannot pass what the
   // server would reject. Debounced, and stale replies are dropped.
   useEffect(() => {
@@ -1037,7 +1082,11 @@ export function RuleSheet({
   }, [form.pattern, form.is_regex, form.action, form.value, form.field]);
   const broken = (check?.errors || []).filter((e) => e.error),
     slow = (check?.errors || []).filter((e) => e.slow),
-    blocked = busy || !form.pattern.trim() || broken.length > 0;
+    blocked =
+      busy ||
+      !form.pattern.trim() ||
+      broken.length > 0 ||
+      form.conditions.some((c) => !c.pattern.trim());
   // A count belongs to the rule it was counted for, so editing retires it.
   useEffect(() => {
     setTried(null);
@@ -1049,6 +1098,9 @@ export function RuleSheet({
     form.action,
     form.value,
     form.feed_id,
+    form.negate,
+    form.feed_negate,
+    form.conditions,
   ]);
   // The same pass that applying uses, over one rule, saved or not.
   async function tryRule() {
@@ -1057,7 +1109,7 @@ export function RuleSheet({
     try {
       setTried(
         await api("rules/preview", {
-          payload: { rule: { ...form, feed_id: form.feed_id || null } },
+          payload: { rule: payload() },
         }),
       );
     } catch (e) {
@@ -1073,12 +1125,9 @@ export function RuleSheet({
         onSubmit={async (e) => {
           e.preventDefault();
           const saved = await submit(() =>
-            act(
-              "save_rule",
-              { ...form, feed_id: form.feed_id || null },
-              rule ? "Rule saved" : "Rule added",
-              { invalidate: [["rules"]] },
-            ),
+            act("save_rule", payload(), rule ? "Rule saved" : "Rule added", {
+              invalidate: [["rules"]],
+            }),
           );
           if (saved) onClose();
         }}
@@ -1101,6 +1150,14 @@ export function RuleSheet({
               options={RULE_FIELDS.map((x) => ({ value: x, label: x }))}
             />
           </Field>
+          <Field label="When it">
+            <Select
+              label="When it"
+              value={asOp(form.negate)}
+              onChange={(v) => set("negate")(v === "not")}
+              options={MATCHES}
+            />
+          </Field>
           <Field label="Action">
             <Select
               label="Action"
@@ -1121,9 +1178,12 @@ export function RuleSheet({
             )
           }
           hint={
-            form.is_regex
-              ? "One per line — the rule runs if any line matches."
-              : "One per line, matched literally, ignoring case."
+            (form.is_regex
+              ? "One per line — any line matching counts as a match."
+              : "One per line, matched literally, ignoring case.") +
+            (form.conditions.length
+              ? " The rule runs only when every condition holds."
+              : "")
           }
         >
           <textarea
@@ -1156,6 +1216,61 @@ export function RuleSheet({
             {check.value_error}
           </p>
         )}
+        {form.conditions.map((c, i) => (
+          <fieldset className="rule-condition" key={i}>
+            <legend>And</legend>
+            <div className="form-grid">
+              <Select
+                label={`Condition ${i + 1} field`}
+                value={c.field}
+                onChange={(v) => setCondition(i, { field: v })}
+                options={RULE_FIELDS.map((x) => ({ value: x, label: x }))}
+              />
+              <Select
+                label={`Condition ${i + 1} test`}
+                value={asOp(c.negate)}
+                onChange={(v) => setCondition(i, { negate: v === "not" })}
+                options={MATCHES}
+              />
+              <button
+                type="button"
+                className="rule-condition-remove"
+                onClick={() =>
+                  setForm((f) => ({
+                    ...f,
+                    conditions: f.conditions.filter((_, j) => j !== i),
+                  }))
+                }
+              >
+                Remove
+              </button>
+            </div>
+            <textarea
+              aria-label={`Condition ${i + 1} patterns`}
+              rows={2}
+              required
+              spellCheck={false}
+              value={c.pattern}
+              onChange={(e) => setCondition(i, { pattern: e.target.value })}
+              placeholder="One per line"
+            />
+          </fieldset>
+        ))}
+        <button
+          type="button"
+          className="rule-condition-add"
+          onClick={() =>
+            setForm((f) => ({
+              ...f,
+              conditions: [
+                ...f.conditions,
+                { field: "title", pattern: "", negate: false },
+              ],
+            }))
+          }
+        >
+          + And another condition
+        </button>
         {(form.action === "tag" || form.action === "rewrite") && (
           <Field
             label={form.action === "tag" ? "Tag to add" : "Replacement"}
@@ -1172,17 +1287,32 @@ export function RuleSheet({
             />
           </Field>
         )}
-        <Field label="Scope">
-          <Select
-            label="Scope"
-            value={form.feed_id || ""}
-            onChange={set("feed_id")}
-            options={[
-              { value: "", label: "All feeds" },
-              ...data.feeds.map((f) => ({ value: f.id, label: f.title })),
-            ]}
-          />
-        </Field>
+        <div className="form-grid">
+          {form.feed_id && (
+            <Field label="Feeds">
+              <Select
+                label="Feeds"
+                value={asOp(form.feed_negate)}
+                onChange={(v) => set("feed_negate")(v === "not")}
+                options={[
+                  { value: "is", label: "Only in" },
+                  { value: "not", label: "Every feed except" },
+                ]}
+              />
+            </Field>
+          )}
+          <Field label="Scope">
+            <Select
+              label="Scope"
+              value={form.feed_id || ""}
+              onChange={set("feed_id")}
+              options={[
+                { value: "", label: "All feeds" },
+                ...data.feeds.map((f) => ({ value: f.id, label: f.title })),
+              ]}
+            />
+          </Field>
+        </div>
         {error && (
           <p role="alert" className="inline-error">
             {error}
@@ -1420,11 +1550,7 @@ export function RulesManager({
           />
           <span>
             <strong>{r.name}</strong>
-            <small>
-              {r.field} {r.is_regex ? "matches" : "contains"}{" "}
-              {(r.pattern || "").split("\n").filter(Boolean).join(" · ")} →{" "}
-              {r.action} {r.value}
-            </small>
+            <small>{describeRule(r, data.feeds)}</small>
           </span>
           <IconButton
             icon={Pencil}

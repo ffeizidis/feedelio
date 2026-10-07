@@ -803,6 +803,10 @@ def test_statistics_report_archive_size(core, site):
     archive = core.statistics()["archive"]
     assert archive["downloads"] == 1
     assert archive["bytes"] > 1000 + (core.root / "app.sqlite").stat().st_size
+    parts = {p["label"]: p for p in archive["parts"]}
+    assert parts["Downloaded episodes"] == {"label": "Downloaded episodes", "note": "1 file", "bytes": 1000}
+    assert parts["Main database"]["bytes"] >= (core.root / "app.sqlite").stat().st_size
+    assert sum(p["bytes"] for p in archive["parts"]) == archive["bytes"]
 
 
 def test_opml_import_keeps_feeds_whose_host_no_longer_resolves(core, monkeypatch):

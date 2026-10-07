@@ -37,12 +37,30 @@ def test_a_sync_gives_each_playlist_a_feed_in_the_youtube_folder(core):
     }
     first = saved(core, "WL")[0]
     assert first["title"] == "Video 1" and first["author"] == "A channel"
-    assert first["meta"] == {"video_id": "video000001", "position": 0}
+    assert first["meta"] == {"video_id": "video000001", "position": 0, "saved": first["meta"]["saved"]}
     assert core.articles(view="youtube")["total"] == 3
     assert core.articles(feed_id="yt-PLmusic")["total"] == 1
     assert core.overview()["counts"]["youtube"] == 3
     # The same sync again changes nothing.
     assert core.youtube_sync([playlist("WL", "Watch later", video(1), video(2))])["new"] == 0
+
+
+def test_a_playlist_lists_what_was_saved_last_first(core):
+    """Not by upload date: a video uploaded long ago and saved today goes on top.
+    The videos one sync brings keep the order YouTube lists them in."""
+    core.youtube_sync(
+        [playlist("WL", "Watch later", video(1), video(2)), playlist("PLmusic", "Music", video(3))]
+    )
+    core.youtube_sync([playlist("WL", "Watch later", video(5), video(4), video(1), video(2))])
+    with core.db:  # Uploaded in reverse of when they were saved.
+        for n, year in ((1, 2026), (2, 2025), (4, 2010), (5, 2001)):
+            core.db.execute(
+                "UPDATE articles SET published=? WHERE guid=?", (f"{year}-01-01", f"yt:video:video{n:06d}")
+            )
+    titles = lambda **kw: [a["title"] for a in core.articles(**kw)["items"]]  # noqa: E731
+    assert titles(feed_id="yt-WL") == ["Video 5", "Video 4", "Video 1", "Video 2"]
+    assert titles(feed_id="yt-WL", sort="oldest") == ["Video 2", "Video 1", "Video 4", "Video 5"]
+    assert titles(view="youtube")[:2] == ["Video 5", "Video 4"]
 
 
 def test_saved_videos_stay_out_of_the_subscriptions(core, site):

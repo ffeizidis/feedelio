@@ -291,6 +291,57 @@ function fileSize(bytes) {
   for (; bytes >= 1024 && i < units.length - 1; i++) bytes /= 1024;
   return `${bytes < 10 && i ? bytes.toFixed(1) : Math.round(bytes)} ${units[i]}`;
 }
+// The archive card names what takes the space, on hover or focus. Fixed and
+// placed from the card, so the dialog's scroll box cannot clip it.
+function ArchiveSize({ archive, articles }) {
+  const [at, setAt] = useState(null);
+  const show = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setAt({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - 440)),
+      top: r.bottom + 8,
+    });
+  };
+  return (
+    <div
+      className="archive-card"
+      tabIndex={0}
+      aria-describedby="archive-parts"
+      onMouseEnter={show}
+      onFocus={show}
+      onMouseLeave={() => setAt(null)}
+      onBlur={() => setAt(null)}
+    >
+      <strong>{fileSize(archive.bytes)}</strong>
+      <span>
+        Archive size · {articles} articles
+        {archive.downloads ? `, ${archive.downloads} downloads` : ""}
+      </span>
+      <span
+        className="hover-card"
+        id="archive-parts"
+        role="tooltip"
+        hidden={!at}
+        style={at || undefined}
+      >
+        <strong>What takes the space</strong>
+        <span className="archive-parts">
+          {archive.parts.map((p) => (
+            <React.Fragment key={p.label}>
+              <span>
+                {p.label}
+                <small>{p.note}</small>
+              </span>
+              <span>{fileSize(p.bytes)}</span>
+            </React.Fragment>
+          ))}
+          <span>Total</span>
+          <span>{fileSize(archive.bytes)}</span>
+        </span>
+      </span>
+    </div>
+  );
+}
 // The same ages, for a feed that may never have been checked.
 const elapsed = (value) => (value ? ago(value) : "never");
 // What the server says about a feed, in the words the library uses. The
@@ -2927,15 +2978,10 @@ function Library({
                       <strong>{stats.data.totals.saved}</strong>
                       <span>Saved for later</span>
                     </div>
-                    <div>
-                      <strong>{fileSize(stats.data.archive.bytes)}</strong>
-                      <span>
-                        Archive size · {stats.data.totals.articles} articles
-                        {stats.data.archive.downloads
-                          ? `, ${stats.data.archive.downloads} downloads`
-                          : ""}
-                      </span>
-                    </div>
+                    <ArchiveSize
+                      archive={stats.data.archive}
+                      articles={stats.data.totals.articles}
+                    />
                   </div>
                   <h3>Where your attention goes</h3>
                   <div className="habit-table">

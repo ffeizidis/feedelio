@@ -2661,16 +2661,31 @@ class Core:
         )
 
     def archive_size(self):
-        """Library size on disk: both databases (with WAL) and downloaded episodes."""
-        files = (
-            list(self.root.glob("*.sqlite*"))
-            + list((self.root / "downloads").glob("*"))
-            + list((self.root / "thumbs").glob("*"))
-        )
-        return dict(
-            bytes=sum(p.stat().st_size for p in files if p.is_file()),
-            downloads=sum(1 for p in (self.root / "downloads").iterdir() if p.is_file()),
-        )
+        """Library size on disk, part by part: both databases (with WAL), saved
+        thumbnails, downloaded episodes and the weekly feed-list backups."""
+
+        def files(pattern, name=""):
+            return [p for p in (self.root / name).glob(pattern) if p.is_file()]
+
+        def count(found, word):
+            return f"{len(found)} {word}{'' if len(found) == 1 else 's'}"
+
+        def part(label, note, found):
+            return dict(label=label, note=note, bytes=sum(p.stat().st_size for p in found))
+
+        thumbs, downloads, backups = files("*", "thumbs"), files("*", "downloads"), files("*", "backups")
+        parts = [
+            part("Main database", "Articles, search index, settings", files("app.sqlite*")),
+            part(
+                "Feed parser's database",
+                "Recent entries, to tell new posts from seen ones",
+                files("reader.sqlite*"),
+            ),
+            part("YouTube thumbnails", count(thumbs, "image"), thumbs),
+            part("Downloaded episodes", count(downloads, "file"), downloads),
+            part("Feed-list backups", count(backups, "file") + ", written weekly", backups),
+        ]
+        return dict(bytes=sum(p["bytes"] for p in parts), downloads=len(downloads), parts=parts)
 
     def youtube_sync(self, playlists):
         """The extension sends every playlist of the signed-in YouTube account.

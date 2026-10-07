@@ -1,6 +1,7 @@
 """New posts arrive within the hour: every feed is checked at least hourly,
 "Update now" goes first, and a laptop waking from sleep costs no feed a failure."""
 
+import time
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -228,3 +229,23 @@ def test_the_worker_refreshes_many_feeds_side_by_side_without_locking_up(core, s
     assert not left["n"]
     assert not core.rows("SELECT error FROM jobs WHERE status='failed' AND error LIKE '%locked%'")
     assert all(f["checked"] and not f["error"] for f in core.feeds())
+
+
+def test_offline_the_scheduler_waits_for_the_network_instead_of_every_feed(core, site, monkeypatch):
+    base, _, _ = site
+    core.subscribe(base + "/rss")
+    with core.db:  # Due, with nothing queued for it yet.
+        core.db.execute("DELETE FROM jobs")
+        core.db.execute("UPDATE feeds SET next_check=NULL")
+    refreshes = lambda: len(core.rows("SELECT id FROM jobs WHERE kind='refresh'"))  # noqa: E731
+    # A check has just found the network down, and it is still down.
+    monkeypatch.setattr(Core, "network_checked", (time.monotonic(), False))
+    core.schedule()
+    assert refreshes() == 0
+    # Looked at again once the half minute is up, it is back.
+    monkeypatch.setattr(Core, "network_checked", (time.monotonic() - 31, False))
+    monkeypatch.setattr("socket.getaddrinfo", lambda *_, **__: [])
+    with core.db:
+        core.db.execute("UPDATE feeds SET checked=?", (now(),))
+    core.schedule()
+    assert refreshes() == 1

@@ -2181,11 +2181,14 @@ class Core:
                 "DELETE FROM jobs WHERE kind='refresh' AND status IN ('done','failed') AND updated<?",
                 (now(days=-1),),
             )
-        for f in self.rows(
-            "SELECT id FROM feeds WHERE deleted=0 AND url LIKE 'http%' AND (next_check IS NULL OR next_check<=?)",
-            (now(),),
-        ):
-            self.enqueue("refresh", {"feed_id": f["id"]})
+        # Offline, every feed would come due each minute only to fail at its
+        # name lookup: wait for the network instead, looked at twice a minute.
+        if Core.network_checked[1] or self.network_up(""):
+            for f in self.rows(
+                "SELECT id FROM feeds WHERE deleted=0 AND url LIKE 'http%' AND (next_check IS NULL OR next_check<=?)",
+                (now(),),
+            ):
+                self.enqueue("refresh", {"feed_id": f["id"]})
         if not self.rows(
             "SELECT id FROM jobs WHERE kind='purge' AND created>?",
             (now(days=-1),),

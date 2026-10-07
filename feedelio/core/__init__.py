@@ -1069,11 +1069,16 @@ class Core:
                 AND bf.folder_id!='youtube'
                 AND (b.added<a.added OR (b.added=a.added AND b.id<a.id))
                 AND title_similarity(a.title,b.title)>=94))"""
-        order = (
-            "(SELECT max(e.created) FROM events e WHERE e.article_id=a.id AND e.kind='open') DESC"
-            if view == "history"
-            else "a.published " + ("ASC" if sort == "oldest" else "DESC")
-        )
+        newest, oldest = ("DESC", "ASC") if sort != "oldest" else ("ASC", "DESC")
+        if view == "history":
+            order = "(SELECT max(e.created) FROM events e WHERE e.article_id=a.id AND e.kind='open') DESC"
+        elif view == "youtube" or (feed_id or "").startswith(PLAYLIST):
+            # A playlist lists what was saved last first, not what was uploaded
+            # last; one sync's arrivals keep YouTube's own order.
+            order = f"""coalesce(json_extract(a.meta,'$.saved'),a.added) {newest},
+              json_extract(a.meta,'$.position') {oldest}"""
+        else:
+            order = "a.published " + newest
         counts = self.one(
             f"SELECT count(*) n, coalesce(sum(a.read=0),0) unread {ARTICLES} WHERE {where}", args
         )
@@ -2679,6 +2684,7 @@ class Core:
                     stored = self.rows("SELECT id,meta FROM articles WHERE id=?", (id,))
                 a = stored[0]
                 meta = dict(a["meta"], video_id=v["id"], position=position)
+                meta.setdefault("saved", stamp)
                 if "checked" not in meta and not v.get("unavailable"):
                     with self.db:
                         self._enqueue("video", {"video_id": v["id"]})

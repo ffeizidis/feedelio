@@ -322,6 +322,7 @@ def probe_video(url, options=None):
         author="",
         published=None,
         status="",
+        upcoming=False,
     )
     with http_client(options, timeout=30) as client:
         response = client.head(f"{YOUTUBE}/shorts/{id}", headers=headers)
@@ -372,6 +373,9 @@ def watch_page_details(text):
         captions=tracks[0]["baseUrl"] if tracks else "",
         api_key=(regex.search(r'"INNERTUBE_API_KEY":"([\w-]+)"', text) or [None, ""])[1],
         status=str((player.get("playabilityStatus") or {}).get("status") or ""),
+        # A premiere or stream that has not started: "LIVE_STREAM_OFFLINE" until it does.
+        upcoming=bool(details.get("isUpcoming"))
+        or (player.get("playabilityStatus") or {}).get("status") == "LIVE_STREAM_OFFLINE",
     )
 
 

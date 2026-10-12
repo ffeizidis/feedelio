@@ -401,6 +401,10 @@ def feed_guesses(page_url, page):
     return list(dict.fromkeys(guesses))[:12]
 
 
+# How many hours a video without a length yet (a premiere, a live stream) is looked at again.
+VIDEO_RECHECKS = 24 * 7
+
+
 def retry_at(exc, attempts):
     """When to retry after a publisher pushed back: exponential, or its Retry-After."""
     from email.utils import parsedate_to_datetime
@@ -478,6 +482,7 @@ class Core:
             for name, definition in (
                 ("duration", "INTEGER NOT NULL DEFAULT 0"),
                 ("meta", "TEXT NOT NULL DEFAULT '{}'"),
+                ("upcoming", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name in columns:
                     continue
@@ -745,9 +750,9 @@ class Core:
         # The reading list and saved playlists are not subscriptions: they have
         # their own views instead.
         feeds = self.rows(
-            """SELECT f.*,count(CASE WHEN a.read=0 AND a.deleted=0 THEN 1 END) unread,
-          count(CASE WHEN a.deleted=0 THEN 1 END) total,
-          count(CASE WHEN a.deleted=0 AND (EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value IN ('paywall','archive-preview'))) THEN 1 END) partial_items FROM feeds f
+            """SELECT f.*,count(CASE WHEN a.read=0 AND a.deleted=0 AND a.upcoming=0 THEN 1 END) unread,
+          count(CASE WHEN a.deleted=0 AND a.upcoming=0 THEN 1 END) total,
+          count(CASE WHEN a.deleted=0 AND a.upcoming=0 AND (EXISTS(SELECT 1 FROM json_each(a.tags) WHERE value IN ('paywall','archive-preview'))) THEN 1 END) partial_items FROM feeds f
           LEFT JOIN articles a ON a.feed_id=f.id WHERE f.deleted=0 AND f.id!=? AND (f.folder_id=?)=?
           GROUP BY f.id ORDER BY f.title COLLATE NOCASE""",
             (READING_LIST, YOUTUBE, int(playlists)),
@@ -785,7 +790,7 @@ class Core:
           coalesce(sum(a.read=0 AND json_extract(f.options,'$.bookmarked')=1),0) bookmarks,
           coalesce(sum(a.read=0 AND f.id=?),0) reading,
           coalesce(sum(a.read=0 AND f.folder_id=?),0) youtube
-          {ARTICLES} WHERE a.deleted=0 AND f.deleted=0""",
+          {ARTICLES} WHERE a.deleted=0 AND a.upcoming=0 AND f.deleted=0""",
             (READING_LIST, YOUTUBE) * 3,
         )
         # The videos and podcasts pages count apart from All articles.
@@ -1028,7 +1033,7 @@ class Core:
         titles_only=False,
         **ignored,
     ):
-        where, args = ["a.deleted=0", "f.deleted=0"], []
+        where, args = ["a.deleted=0", "a.upcoming=0", "f.deleted=0"], []
         if feed_id:
             where.append("a.feed_id=?")
             args.append(feed_id)
@@ -1874,7 +1879,7 @@ class Core:
                         self.enqueue("extract", {"article_id": id})
         return count
 
-    def extract_article(self, article_id):
+    def extract_article(self, article_id, recheck=0):
         a = self.article(article_id)
         if not a["source_url"]:
             raise ValueError("This article has no source page URL to extract.")
@@ -1883,12 +1888,38 @@ class Core:
         result = None if video else extract(a["url"], request_options(f))
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
+            waiting = (
+                video and (video.get("upcoming") or not video["duration"]) and video.get("status") != "ERROR"
+            )
+            if waiting and recheck < VIDEO_RECHECKS:
+                # A premiere or a stream still live has no length yet: look again in an hour.
+                self.db.execute(
+                    "INSERT INTO jobs(id,kind,payload,created,updated,result) VALUES(?,?,?,?,?,?)",
+                    (
+                        uid(),
+                        "extract",
+                        json.dumps({"article_id": article_id, "recheck": recheck + 1}, sort_keys=True),
+                        now(),
+                        now(),
+                        json.dumps({"not_before": now(hours=1)}),
+                    ),
+                )
+            # A premiere stays out of the lists until it airs, or until a week of
+            # looking says it never will.
+            upcoming = int(bool(video and video.get("upcoming") and recheck < VIDEO_RECHECKS))
+            if recheck:  # Only the length was missing; the rest was settled the first time.
+                self.db.execute(
+                    "UPDATE articles SET duration=max(duration,?),upcoming=? WHERE id=?",
+                    (video["duration"] if video else 0, upcoming, article_id),
+                )
+                return {"id": article_id}
             # Fetching can take seconds: merge content into current user state,
             # never the snapshot from before the request.
             a = self.one("SELECT * FROM articles WHERE id=?", (article_id,))
             if video:  # The description is the article; only the kind of video is learned.
                 a["url"] = video["url"]
                 a["duration"] = video["duration"]
+                a["upcoming"] = upcoming
                 if video["short"]:
                     a["tags"] = sorted(set(a["tags"] + ["short"]))
             else:
@@ -1901,7 +1932,7 @@ class Core:
             a["extracted"] = 1
             self._write_article(
                 a,
-                "extracted body text url transcript tags words read starred deleted duration".split(),
+                "extracted body text url transcript tags words read starred deleted duration upcoming".split(),
             )
         return {"id": article_id}
 

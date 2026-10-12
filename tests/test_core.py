@@ -641,6 +641,64 @@ Second paragraph</media:description></media:group></entry>
         assert restored.article(long["id"])["duration"] == 0
 
 
+def test_a_premiere_waits_out_of_sight_until_it_airs_then_learns_its_length(core, site, monkeypatch):
+    from feedelio import core as module
+
+    base, _, _ = site
+    pages = [(0, True), (0, True), (2793, False)]
+
+    def probe(url, options=None):
+        duration, upcoming = pages.pop(0)
+        return dict(short=False, url=url, duration=duration, upcoming=upcoming, status="OK")
+
+    monkeypatch.setattr(module, "probe_video", probe)
+    feed = core.subscribe(base + "/rss")["id"]
+    with core.db:  # Only the premiere: not the feed's own post.
+        core.db.execute("DELETE FROM jobs")
+        core.db.execute("UPDATE feeds SET next_check=?", (now(days=1),))
+    id = core.ingest(feed, "yt:video:VDIWZMKZiF4", "Premiere", "https://www.youtube.com/watch?v=VDIWZMKZiF4")
+    core.extract_article(id)
+    core.change_articles([id], starred=True)  # Rechecking touches only the length, never what the reader did.
+
+    def due():
+        with core.db:
+            core.db.execute("UPDATE jobs SET result=json_set(result,'$.not_before','2000-01-01')")
+        while core.tick():
+            pass
+
+    def listed():
+        return (
+            [a["id"] for a in core.articles()["items"]],
+            core.feeds()[0]["unread"],
+            core.overview()["counts"],
+        )
+
+    assert listed()[:2] == ([], 0) and listed()[2]["unread"] == 0
+    due()
+    assert listed()[0] == [] and core.article(id)["duration"] == 0
+    due()  # It has aired.
+    assert listed()[:2] == ([id], 1) and listed()[2]["unread"] == 1
+    assert core.article(id)["duration"] == 2793 and core.article(id)["starred"] == 1
+    due()  # Nothing is left to look at.
+    assert not pages and not core.rows("SELECT id FROM jobs WHERE status='queued'")
+
+
+def test_a_premiere_that_never_airs_is_shown_after_a_week(core, site, monkeypatch):
+    from feedelio import core as module
+
+    monkeypatch.setattr(
+        module, "probe_video", lambda url, options=None: dict(short=False, url=url, duration=0, upcoming=True)
+    )
+    base, _, _ = site
+    feed = core.subscribe(base + "/rss")["id"]
+    id = core.ingest(feed, "yt:video:VDIWZMKZiF4", "Cancelled", "https://www.youtube.com/watch?v=VDIWZMKZiF4")
+    core.extract_article(id, recheck=module.VIDEO_RECHECKS - 1)
+    assert core.articles()["total"] == 0
+    core.extract_article(id, recheck=module.VIDEO_RECHECKS)
+    assert core.articles()["total"] == 1
+    assert len(core.rows("SELECT id FROM jobs WHERE kind='extract' AND status='queued'")) == 1
+
+
 def test_bookmarked_feeds_form_their_own_stream(core, site):
     base, _, _ = site
     id = subscription(core, site)
@@ -857,3 +915,16 @@ def test_a_feed_can_arrive_read_and_podcasts_are_marked(core, site):
     )
     audio = {a["id"]: a["audio"] for a in core.articles(limit=50)["items"]}
     assert audio[typed] and audio[bare] and not audio[image] and not audio[before]
+
+
+def test_a_watch_page_tells_an_upcoming_premiere_from_one_that_has_aired():
+    from feedelio.core.content import watch_page_details
+
+    def page(player):
+        return f"<script>var ytInitialPlayerResponse = {json.dumps(player)};</script>"
+
+    upcoming = {"playabilityStatus": {"status": "LIVE_STREAM_OFFLINE"}, "videoDetails": {"isUpcoming": True}}
+    assert watch_page_details(page(upcoming))["upcoming"]
+    assert not watch_page_details(page({"playabilityStatus": {"status": "OK"}, "videoDetails": {}}))[
+        "upcoming"
+    ]

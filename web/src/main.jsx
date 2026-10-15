@@ -1122,6 +1122,7 @@ function App() {
     setModal("feeds");
   };
   const count = articles.data?.total || 0;
+  const all = articles.data?.all ?? count;
   const archive =
     activeFeed &&
     (data.backfills || []).find((j) => j.payload.feed_id === activeFeed.id);
@@ -1540,8 +1541,8 @@ function App() {
           )}
           <div className="stream-meta">
             <span>
-              {count.toLocaleString()}{" "}
-              {searchOpen ? "results" : count === 1 ? "article" : "articles"} ·{" "}
+              {all.toLocaleString()}{" "}
+              {searchOpen ? "results" : all === 1 ? "article" : "articles"} ·{" "}
               {articles.data?.unread || 0} unread
             </span>
             <div className="stream-controls">

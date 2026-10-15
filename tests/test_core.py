@@ -138,7 +138,10 @@ def test_state_undo_history_and_deleted_feeds(core, site):
     id = subscription(core, site)
     a = core.articles()["items"][0]
     result = core.change_articles([a["id"]], read=True, opened=True)
-    assert core.articles(unread=True)["total"] == 0
+    unread = core.articles(unread=True)
+    assert unread["total"] == 0 and unread["items"] == []
+    # The heading still counts the read ones it no longer lists.
+    assert unread["all"] == core.articles()["total"] >= 1
     assert core.articles(view="history")["total"] == 1
     assert core.statistics()["days"][0]["opens"] == 1
     core.undo(result["undo"])

@@ -1106,7 +1106,6 @@ class Core:
             view=view,
             feed_id=feed_id,
             folder_id=folder_id,
-            unread=unread,
             q=q,
             tag=tag,
             titles_only=titles_only,
@@ -1132,9 +1131,14 @@ class Core:
               json_extract(a.meta,'$.position') {oldest}"""
         else:
             order = "a.published " + newest
+        # Hiding read articles shortens the page, not the place: the heading
+        # still counts everything in it.
         counts = self.one(
             f"SELECT count(*) n, coalesce(sum(a.read=0),0) unread {ARTICLES} WHERE {where}", args
         )
+        shown = counts["unread"] if unread else counts["n"]
+        if unread:
+            where += " AND a.read=0"
         items = self.rows(
             f"""SELECT a.id,a.feed_id,a.title,a.url,a.author,a.published,a.read,a.starred,
           a.read_at,a.words,a.tags,a.duplicate,substr(a.text,1,190) excerpt,f.title feed_title,f.folder_id,
@@ -1147,7 +1151,7 @@ class Core:
         for a in items:
             if a["feed_id"] == READING_LIST:
                 a["feed_title"] = site_name(a["url"])
-        return {"items": items, "total": counts["n"], "unread": counts["unread"]}
+        return {"items": items, "total": shown, "all": counts["n"], "unread": counts["unread"]}
 
     def article(self, id):
         a = self.one(

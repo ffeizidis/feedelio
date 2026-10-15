@@ -20,7 +20,10 @@ def test_api_state_and_exports(core, site):
             ).status_code
             == 200
         )
-        assert client.get("/api/articles?unread=true").json()["total"] == 1
+        unread = client.get("/api/articles?unread=true").json()
+        assert unread["total"] == 1 and len(unread["items"]) == 1
+        # Hiding read articles doesn't change how many the heading says there are.
+        assert unread["all"] == client.get("/api/articles").json()["total"]
         assert client.get("/api/export/opml").headers["content-type"].startswith("application/xml")
         assert client.get("/api/export/json").json()["format"] == "feedelio"
         assert client.get("/api/articles/" + id + "/obsidian").status_code == 200

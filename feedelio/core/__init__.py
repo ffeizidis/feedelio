@@ -1527,17 +1527,6 @@ class Core:
                 if not a["extracted"]:
                     a["url"] = url or a["url"]
             if a["guid"] == guid and a["fingerprint"] != digest:
-                if (
-                    a["extracted"]
-                    and "paywall" not in a["tags"]
-                    and len(plain(body).split()) * 2 < a["words"]
-                    and a["url"]
-                    and not video_id(a["url"])
-                    and feed_id != READING_LIST
-                ):
-                    # The feed now carries far less than was read from the page:
-                    # a free post put behind the paywall later says so only there.
-                    self._enqueue("extract", {"article_id": a["id"], "paywall": 1})
                 a.update(title=title or a["title"], author=author or a["author"], fingerprint=digest)
                 if not a["extracted"]:
                     a["body"] = body
@@ -1894,24 +1883,11 @@ class Core:
                         self.enqueue("extract", {"article_id": id})
         return count
 
-    def extract_article(self, article_id, recheck=0, paywall=0):
+    def extract_article(self, article_id, recheck=0):
         a = self.article(article_id)
         if not a["source_url"]:
             raise ValueError("This article has no source page URL to extract.")
         f = self.one("SELECT * FROM feeds WHERE id=?", (a["feed_id"],))
-        if paywall:  # Only whether the page is now paid; the text already read is kept.
-            try:
-                locked = extract(a["url"], request_options(f))["paywall"]
-            except ValueError:
-                locked = False
-            with self.db:
-                self.db.execute("BEGIN IMMEDIATE")
-                a = self.one("SELECT * FROM articles WHERE id=?", (article_id,))
-                if locked and "paywall" not in a["tags"]:
-                    a["tags"] = sorted(set(a["tags"] + ["paywall"]))
-                    a = self.apply_rules(a)
-                    self._write_article(a, "body text words tags read starred deleted".split())
-            return {"id": article_id}
         video = probe_video(a["url"], request_options(f)) if video_id(a["url"]) else None
         result = None if video else extract(a["url"], request_options(f))
         with self.db:

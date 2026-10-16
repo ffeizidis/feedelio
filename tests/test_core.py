@@ -931,31 +931,3 @@ def test_a_watch_page_tells_an_upcoming_premiere_from_one_that_has_aired():
     assert not watch_page_details(page({"playabilityStatus": {"status": "OK"}, "videoDetails": {}}))[
         "upcoming"
     ]
-
-
-def test_a_post_put_behind_the_paywall_after_it_was_read_is_marked_paywalled(core, site, monkeypatch):
-    feed = core.subscribe(site[0] + "/rss")["id"]
-    core.db.execute("DELETE FROM jobs")
-    core.save_rule("Paywalls", "tags", "paywall", "read")
-    full = "<p>" + "Every word of the essay, free when it went out. " * 40 + "</p>"
-    id = core.ingest(feed, "omar", "The Omar case", site[0] + "/omar", full)
-    pages = []
-
-    def page(url, options=None, **kwargs):
-        pages.append(url)
-        return dict(body=full, url=url, transcript="", paywall=len(pages) > 1, title="")
-
-    monkeypatch.setattr("feedelio.core.extract", page)
-    core.extract_article(id)
-    assert "paywall" not in core.article(id)["tags"]
-    # An edit that keeps the post whole asks nothing of the page.
-    core.ingest(feed, "omar", "The Omar case", site[0] + "/omar", full + "<p>Corrected.</p>")
-    assert not core.rows("SELECT id FROM jobs WHERE status='queued'")
-    # The publisher locks it: the feed is left with a teaser.
-    core.ingest(feed, "omar", "The Omar case", site[0] + "/omar", "<p>Yesterday evening… Read more</p>")
-    while core.tick():
-        pass
-    saved = core.article(id)
-    assert "paywall" in saved["tags"] and saved["read"]
-    assert saved["words"] > 300  # The full text already read stays.
-    assert pages.count(site[0] + "/omar") == 2

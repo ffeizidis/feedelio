@@ -6,6 +6,7 @@ are internal. Feedparser still does all RSS/Atom parsing and normalization.
 
 import dataclasses
 import io
+import math
 from xml.sax import SAXParseException
 
 from reader._parser.feedparser import FeedparserParser, _process_feed, feedparser
@@ -22,7 +23,8 @@ def duration_seconds(value):
             seconds = seconds * 60 + float(part)
     except ValueError:
         return 0
-    return int(seconds) if seconds > 0 else 0
+    # float() accepts "inf", "nan" and "1e309"; int() of those raises outside the guard.
+    return int(seconds) if math.isfinite(seconds) and seconds > 0 else 0
 
 
 def entry_fields(entry, durations=None):

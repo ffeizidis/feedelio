@@ -168,9 +168,7 @@ def extract(url, options=None, *, document=None, transcripts=True):
             raise ValueError("The configured article CSS selector matched no elements.")
         body = "".join(map(str, selected))
     else:
-        body = trafilatura.extract(
-            data, output_format="html", include_links=True, include_images=True, include_tables=True
-        )
+        body = _extract_body(data)
     try:
         transcript = provided_transcript(soup, data, document_url, options) if transcripts else ""
     except (httpx.HTTPError, OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
@@ -194,6 +192,21 @@ def extract(url, options=None, *, document=None, transcripts=True):
         "paywall": paywall,
         "title": soup.title.get_text(strip=True) if soup.title else final,
     }
+
+
+def _extract_body(data):
+    """Prefer the extraction with links, unless keeping links cost article text.
+
+    trafilatura (up to at least 2.4.0) drops prose that sits loose in a block next to an
+    inline link when ``include_links`` is on — Blogger posts lose whole paragraphs and
+    keep only the link text. Links are worth less than the words around them.
+    """
+    options = dict(output_format="html", include_images=True, include_tables=True)
+    linked = trafilatura.extract(data, include_links=True, **options)
+    unlinked = trafilatura.extract(data, include_links=False, **options)
+    if unlinked and len(plain(linked)) < 0.95 * len(plain(unlinked)):
+        return unlinked
+    return linked
 
 
 def provided_transcript(soup, data, document_url, options):

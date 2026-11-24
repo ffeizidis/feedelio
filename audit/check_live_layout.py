@@ -35,8 +35,9 @@ def main():
             reader = page.locator(".reader-pane").bounding_box()
             assert sidebar["y"] == divider["y"] == reader["y"] == 0
             assert sidebar["height"] == divider["height"] == reader["height"] == 1018
-            assert abs(listing["x"] - sidebar["width"]) < 1
-            assert abs(reader["x"] - sidebar["width"] - listing["width"]) < 1
+            # Adjacent pane edges meet; the sidebar starts after the 64px tray, not at 0.
+            assert abs(listing["x"] - sidebar["x"] - sidebar["width"]) < 1
+            assert abs(reader["x"] - listing["x"] - listing["width"]) < 1
             assert abs(reader["x"] + reader["width"] - page.viewport_size["width"]) < 1
             results.append({"view": label, "viewport": page.viewport_size, "reader": reader})
 
@@ -51,7 +52,7 @@ def main():
             page.locator(".feed-line").first.click()
             expect(page.locator(".article-row").first).to_be_visible()
             expect(page.locator(".row-feed")).to_have_count(0)
-            assert page.locator(".feed-line").first.evaluate("e=>getComputedStyle(e).fontSize") == "17px"
+            assert page.locator(".feed-line").first.evaluate("e=>getComputedStyle(e).fontSize") == "19px"
             icon = page.request.get("http://localhost:8000/favicon.svg?v=script-f")
             assert icon.ok and "Italianno" in icon.text()
             for width in (1240, 1440, 1599, 1600, 1900, 2560):
@@ -62,7 +63,7 @@ def main():
             box = separator.bounding_box()
             page.mouse.move(box["x"] + 4, 300)
             page.mouse.down()
-            page.mouse.move(384, 300)
+            page.mouse.move(page.locator(".sidebar").bounding_box()["x"] + 384, 300)
             page.mouse.up()
             expect(separator).to_have_attribute("aria-valuenow", "384")
             geometry("resized source list")

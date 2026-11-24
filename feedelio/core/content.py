@@ -239,19 +239,54 @@ def extract(url, options=None, *, document=None, transcripts=True):
     }
 
 
+_INLINE_RUN_BREAKERS = frozenset(
+    "address article aside blockquote dd div dl dt figure footer h1 h2 h3 h4 h5 h6 header hr "
+    "li main nav ol p pre section table ul".split()
+)
+
+
+def _paragraphed(data):
+    """Rewrite loose inline runs as paragraphs, the shape trafilatura's link mode expects.
+
+    Blogger wraps a post's prose in a ``<span>`` that holds ``<div>``s and leaves the
+    text loose between them. Unwrap such spans, then give every run of loose text and
+    inline elements inside a ``<div>`` its own ``<p>``.
+    """
+    soup = BeautifulSoup(data, "html.parser")
+    for span in soup.find_all("span"):
+        if span.find(_INLINE_RUN_BREAKERS):
+            span.unwrap()
+    for div in soup.find_all("div"):
+        run = []
+        for child in [*div.children, None]:
+            if child is not None and child.name not in _INLINE_RUN_BREAKERS:
+                run.append(child)
+                continue
+            if any(str(node).strip() for node in run):
+                paragraph = soup.new_tag("p")
+                run[0].insert_before(paragraph)
+                paragraph.extend([node.extract() for node in run])
+            run = []
+    return str(soup)
+
+
 def _extract_body(data):
-    """Prefer the extraction with links, unless keeping links cost article text.
+    """Extract with links, without letting the link mode cost article text.
 
     trafilatura (up to at least 2.4.0) drops prose that sits loose in a block next to an
-    inline link when ``include_links`` is on — Blogger posts lose whole paragraphs and
-    keep only the link text. Links are worth less than the words around them.
+    inline link when ``include_links`` is on: Blogger posts lose whole paragraphs and keep
+    only the link text. The link-free run keeps the words but drops links, and with them
+    images wrapped in links. So: the plain linked run when it lost nothing; else the
+    linked run over paragraphed markup; else words over links and images.
     """
     options = dict(output_format="html", include_images=True, include_tables=True)
-    linked = trafilatura.extract(data, include_links=True, **options)
     unlinked = trafilatura.extract(data, include_links=False, **options)
-    if unlinked and len(plain(linked)) < 0.95 * len(plain(unlinked)):
-        return unlinked
-    return linked
+    whole = 0.95 * len(plain(unlinked))
+    linked = trafilatura.extract(data, include_links=True, **options)
+    if len(plain(linked)) >= whole:
+        return linked
+    repaired = trafilatura.extract(_paragraphed(data), include_links=True, **options)
+    return repaired if len(plain(repaired)) >= whole else unlinked
 
 
 def provided_transcript(soup, data, document_url, options):

@@ -88,7 +88,8 @@ async function youtubeSync(force = false) {
     );
     const playlists = await collect(client);
     const sent = playlists.map(({ error, ...p }) => p);
-    const digest = JSON.stringify(sent);
+    // Keyed to the destination too, so a newly configured server gets its first snapshot.
+    const digest = JSON.stringify({ server: config.server, playlists: sent });
     const { youtubeDigest } = await chrome.storage.local.get("youtubeDigest");
     if (force || digest !== youtubeDigest) {
       await post(config, "youtube_sync", { playlists: sent });

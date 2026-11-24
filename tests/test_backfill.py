@@ -497,3 +497,23 @@ def test_archive_pacing_is_per_site_so_different_sites_advance_together(core, si
 
     assert archives.interval("youtube.com") == 10 and archives.interval("localhost") == 60
     assert not core.tick()  # Both sites are inside their minute; the worker idles.
+
+
+def test_wordpress_feed_that_ignores_paged_stops_instead_of_looping(core, site):
+    base, routes, _ = site
+    for path in ("/feed", *(f"/feed?paged={n}" for n in range(2, 8))):
+        wordpress_page(routes, path, 1)  # Every ?paged= returns the first page again.
+    feed = core.subscribe(base + "/feed")["id"]
+    core.refresh(feed)
+    with core.db:
+        core.db.execute("UPDATE jobs SET status='done'")
+    job = core.enqueue("backfill", {"feed_id": feed})["id"]
+    result = run(core, job)
+    for _ in range(5):
+        if result["status"] == "done":
+            break
+        due(core, job)
+        result = run(core, job)
+    assert result["status"] == "done" and result["error"] is None
+    assert result["result"]["pages"] <= 2 and not result["result"]["next_url"]
+    assert "repeats" in result["result"]["message"]

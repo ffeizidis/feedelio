@@ -107,10 +107,35 @@ export function parsePlaylists(data) {
     .map(([id, title]) => ({ id, title }));
 }
 
+// The token for the page after this one: the last "load more" item in it.
+function continuationToken(data) {
+  let token = "";
+  for (const o of walk(data))
+    if (o.continuationItemRenderer)
+      token =
+        [...walk(o.continuationItemRenderer)].find(
+          (x) => x.continuationCommand?.token,
+        )?.continuationCommand.token || token;
+  return token;
+}
+
+// The next page of the Playlists grid. Only the grid's own items are searched,
+// so a "load more" elsewhere on the page is never followed.
+export function playlistsContinuation(data) {
+  for (const o of walk(data)) {
+    const items =
+      o.richGridRenderer?.contents ||
+      o.gridRenderer?.items ||
+      o.appendContinuationItemsAction?.continuationItems;
+    const token = items && continuationToken(items);
+    if (token) return token;
+  }
+  return "";
+}
+
 // One page of a playlist: its videos in order, and the token for the next.
 export function parseVideos(data) {
   const videos = [];
-  let continuation = "";
   for (const o of walk(data)) {
     const v = o.playlistVideoRenderer;
     if (v?.videoId)
@@ -121,14 +146,8 @@ export function parseVideos(data) {
         // A taken-down or private video is listed but cannot be played.
         unavailable: v.isPlayable === false,
       });
-    const token = o.continuationItemRenderer
-      ? [...walk(o.continuationItemRenderer)].find(
-          (x) => x.continuationCommand?.token,
-        )?.continuationCommand.token
-      : "";
-    if (token) continuation = token;
   }
-  return { videos, continuation };
+  return { videos, continuation: continuationToken(data) };
 }
 
 export function playlistTitle(data) {
@@ -149,7 +168,15 @@ export async function collect({ page, browse }) {
   const html = await page("/feed/playlists");
   const config = pageConfig(html);
   if (!config.loggedIn) throw new Error("Not signed in to YouTube in Chrome.");
-  const listed = parsePlaylists(embeddedJson(html, "ytInitialData") || {});
+  // The grid loads more playlists as it scrolls. A grid page that fails fails
+  // the sync, so the error shows instead of playlists silently going unsynced.
+  let grid = embeddedJson(html, "ytInitialData") || {};
+  const listed = parsePlaylists(grid);
+  for (let pages = 0, token; (token = playlistsContinuation(grid)); pages++) {
+    if (pages >= MAX_PAGES) throw new Error("Too many pages of playlists.");
+    grid = await browse(config, { continuation: token });
+    listed.push(...parsePlaylists(grid));
+  }
   const playlists = [{ id: "WL", title: "Watch later" }, ...listed].filter(
     (p, i, all) => all.findIndex((q) => q.id === p.id) === i,
   );

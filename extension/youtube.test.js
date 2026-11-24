@@ -12,7 +12,10 @@ import {
   sapisidHash,
 } from "./youtube.js";
 
-const playlistsPage = (loggedIn = true) => `<!doctype html><html><head>
+const playlistsPage = (
+  loggedIn = true,
+  extra = [],
+) => `<!doctype html><html><head>
 <script>ytcfg.set({"LOGGED_IN": ${loggedIn}, "SESSION_INDEX": 0});</script>
 <script>ytcfg.set({"INNERTUBE_API_KEY": "key", "INNERTUBE_CONTEXT": {"client": {"clientName": "WEB", "clientVersion": "2.20260901.00.00"}}});</script>
 </head><body><script>var ytInitialData = ${JSON.stringify({
@@ -60,6 +63,7 @@ const playlistsPage = (loggedIn = true) => `<!doctype html><html><head>
                       title: { runs: [{ text: "Older " }, { text: "layout" }] },
                     },
                   },
+                  ...extra,
                 ],
               },
             },
@@ -223,5 +227,32 @@ test("signed out, nothing is collected", async () => {
   await assert.rejects(
     collect({ page: async () => playlistsPage(false), browse: assert.fail }),
     /Not signed in/,
+  );
+});
+
+test("playlists on later pages of the grid are collected too", async () => {
+  const lockup = (id, title) => ({
+    richItemRenderer: {
+      content: {
+        lockupViewModel: {
+          contentId: id,
+          contentType: "LOCKUP_CONTENT_TYPE_PLAYLIST",
+          metadata: { lockupMetadataViewModel: { title: { content: title } } },
+        },
+      },
+    },
+  });
+  const pages = {
+    "grid-2": nextPage([lockup("PLlater0001", "Later"), more("grid-3")]),
+    "grid-3": nextPage([lockup("PLlast00001", "Last")]),
+  };
+  const result = await collect({
+    page: async () => playlistsPage(true, [more("grid-2")]),
+    browse: async (config, body) =>
+      pages[body.continuation] ?? firstPage(body.browseId, []),
+  });
+  assert.deepEqual(
+    result.map((p) => p.id),
+    ["WL", "PLbread0001", "PLolder0001", "PLlater0001", "PLlast00001"],
   );
 });

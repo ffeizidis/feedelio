@@ -4,7 +4,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 if docker compose version >/dev/null 2>&1; then
-  exec docker compose up --build -d
+  docker compose build
+  project=${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}
+  if docker volume inspect "${project}_feedelio-data" >/dev/null 2>&1; then
+    docker compose stop
+    deploy/migrate-volume.sh "${project}_feedelio-data" feedelio-data feedelio:local
+  fi
+  exec docker compose up -d
 fi
 docker build -t feedelio:local .
 docker stop -t 60 feedelio >/dev/null 2>&1 || true

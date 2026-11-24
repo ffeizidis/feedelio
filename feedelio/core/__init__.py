@@ -7,6 +7,7 @@ transactional projection containing processed content and user-owned state.
 from __future__ import annotations
 
 import base64
+import hashlib
 import inspect
 import io
 import json
@@ -2118,6 +2119,14 @@ class Core:
         else:
             durations = {}
             entries, next_url = archives.feed_page(data, final, headers, durations)
+            # A feed that ignores ?paged= serves the same page under every URL, which the
+            # visited-URL guard cannot see. Compare GUID batches, not inserts: a valid
+            # older page may hold only articles that are already stored.
+            batch = hashlib.sha256("\n".join(sorted(e.id for e in entries)).encode()).hexdigest()
+            if entries and batch in state.get("page_batches", []):
+                state.update(next_url=None, message="Archive repeats the same page; stopped there.")
+                return state
+            state["page_batches"] = [*state.get("page_batches", []), batch]
             for e in entries:
                 state["articles"] += self.ingest_new(feed_id, **entry_fields(e, durations), read=read)[1]
         state["visited"] = [*state["visited"], page]

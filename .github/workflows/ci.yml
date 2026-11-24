@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: uv sync --extra dev
+      - run: uv run ruff check feedelio tests
+      - run: uv run ruff format --check feedelio tests
+      # The browser tests skip without a built SPA; build it so they run.
+      - run: npm ci --prefix web && npm run build --prefix web
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -q
